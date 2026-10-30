@@ -1,0 +1,28 @@
+[Unit]
+Description=Omarchy tablet desktop (UWSM)
+After=omarchy-hw.service fgd-kernel-mode.service seatd.service user@1001.service
+Requires=seatd.service
+Wants=fgd-kernel-mode.service user@1001.service
+ConditionPathExists=/dev/dri/card0
+ConditionPathExists=!/run/omarchy-hw/charger-mode
+
+[Service]
+User=hypr
+Group=hypr
+SupplementaryGroups=video render input seat audio
+PAMName=login
+TTYPath=/dev/tty1
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_SESSION_CLASS=user
+Environment=XDG_SEAT=seat0
+Environment=XDG_VTNR=1
+Environment=XDG_RUNTIME_DIR=/run/user/1001
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
+Environment=LANG=C.UTF-8
+ExecStartPre=+/usr/bin/python /opt/omarchy-tablet/omarchy-install/staged/prepare-runtime.py
+ExecStart=/usr/bin/uwsm start -F -e -D Hyprland -- /opt/omarchy-tablet/gpu/start-hyprland -- --config /home/hypr/.config/hypr/hyprland.lua
+TimeoutStopSec=30
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

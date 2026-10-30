@@ -1,0 +1,6 @@
+# User overlay on the bundled Tokyo Night theme: larger tablet controls.
+[font]
+base-size = 16
+
+[bar]
+size-horizontal = 36

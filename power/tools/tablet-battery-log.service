@@ -1,0 +1,18 @@
+[Unit]
+Description=Read-only battery logger (capacity calibration)
+After=omarchy-hw.service fgd-kernel-mode.service
+
+[Service]
+ExecStart=/opt/omarchy-tablet/diagnostics/tablet-battery-log.py
+Restart=always
+RestartSec=10
+Nice=10
+# Read-only intent: only the log directory is writable.
+ProtectSystem=strict
+StateDirectory=tablet-battery-log
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

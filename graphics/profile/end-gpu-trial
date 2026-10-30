@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+if test -e /run/tablet-gpu-trial || test -e /opt/omarchy-tablet/gpu/enabled; then
+  rm -f /run/tablet-gpu-trial /opt/omarchy-tablet/gpu/enabled
+  systemctl restart omarchy-desktop.service
+fi

@@ -1,0 +1,18 @@
+# Tablet hardware adaptations for an otherwise packaged Omarchy session.
+export LIBSEAT_BACKEND=seatd
+export UWSM_APP_UNIT_TYPE=service
+export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/aq-software-primary.so
+export AQ_TABLET_SOFTWARE_PRIMARY=1
+export TABLET_FINISH_SOFTWARE_FRAMES=1
+export AQ_NO_ATOMIC=0
+export AQ_NO_MODIFIERS=1
+export AQ_DRM_DEVICES=/dev/dri/card0
+export GBM_ALWAYS_SOFTWARE=1
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+export LP_NUM_THREADS=8
+export TABLET_PLAIN_BACKGROUND=1
+export QT_QPA_PLATFORM=wayland
+export QSG_RHI_BACKEND=opengl
+export QSG_RENDER_LOOP=basic
+export GSK_RENDERER=cairo

@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>Tablet playback check</title>
+<style>html,body{margin:0;background:#101018;color:white;font:20px sans-serif;height:100%}video{width:100%;height:100%;object-fit:contain}p{position:fixed;top:8px;left:18px;background:#0009;padding:8px;pointer-events:none}video:fullscreen{background:#101018}</style>
+<video id="video" muted loop autoplay playsinline src="test-1080p30.mp4"></video><p>Tablet playback check • 1080p / 30 fps</p>
+<script>
+window.measure=async function(fullscreen,seconds=12){
+ const v=document.querySelector('video');if(fullscreen)await v.requestFullscreen();else if(document.fullscreenElement)await document.exitFullscreen();
+ await v.play();await new Promise(r=>setTimeout(r,2000));
+ const start=v.getVideoPlaybackQuality(), now=performance.now(), begin=v.currentTime;let frames=0,processing=0,last=0,gaps=[];let active=true;
+ function frame(t,metadata){if(!active)return;frames++;processing+=metadata.processingDuration||0;if(last)gaps.push(t-last);last=t;v.requestVideoFrameCallback(frame)}v.requestVideoFrameCallback(frame);
+ await new Promise(r=>setTimeout(r,seconds*1000));active=false;
+ const end=v.getVideoPlaybackQuality();return {fullscreen,elapsed:(performance.now()-now)/1000,decodedWidth:v.videoWidth,decodedHeight:v.videoHeight,displayWidth:v.getBoundingClientRect().width,displayHeight:v.getBoundingClientRect().height,totalFrames:end.totalVideoFrames-start.totalVideoFrames,droppedFrames:end.droppedVideoFrames-start.droppedVideoFrames,presentedCallbacks:frames,meanDecodeSeconds:frames?processing/frames:0,maxPresentGapMs:Math.max(...gaps),begin,endTime:v.currentTime};
+};
+</script>

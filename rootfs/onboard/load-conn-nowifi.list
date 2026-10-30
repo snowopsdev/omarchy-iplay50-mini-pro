@@ -1,0 +1,15 @@
+ccci_util_lib.ko
+ccci_auxadc.ko
+rps_perf.ko
+ccmni.ko
+mtk_low_battery_throttling.ko
+mtk_dynamic_loading_throttling.ko
+mtk_mdpm.ko
+mtk_pbm.ko
+ccci_md_all.ko
+btif_drv.ko
+connadp.ko
+mddp.ko
+wmt_drv.ko
+bt_drv_connac1x.ko
+connfem.ko

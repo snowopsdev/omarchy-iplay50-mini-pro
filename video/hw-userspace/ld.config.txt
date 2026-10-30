@@ -1,0 +1,8 @@
+# Private VCU runtime only. Install INSIDE its private root at
+# /linkerconfig/ld.config.txt; do not modify host /linkerconfig or /system.
+dir.tablet_vcu = /vendor/bin
+
+[tablet_vcu]
+namespace.default.isolated = true
+namespace.default.search.paths = /vendor/${LIB}/mt6789:/vendor/${LIB}:/system/${LIB}:/apex/com.android.runtime/${LIB}/bionic:/apex/com.android.vndk.v31/${LIB}
+namespace.default.permitted.paths = /vendor/${LIB}:/system/${LIB}:/apex/com.android.runtime/${LIB}/bionic:/apex/com.android.vndk.v31/${LIB}

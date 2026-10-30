@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+. /opt/omarchy-tablet/gpu/tablet-gpu-trial-env
+exec /usr/bin/start-hyprland "$@"

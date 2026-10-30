@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>bench</title>
+<style>
+body{margin:0;font:16px sans-serif;background:#f4f1ea}
+.card{margin:14px;padding:18px;border-radius:14px;background:linear-gradient(135deg,#fff,#e6eefc);box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.card h2{margin:0 0 8px}.row{display:flex;gap:10px}.dot{width:60px;height:60px;border-radius:50%;background:radial-gradient(#f90,#c03)}
+</style>
+<body><script>
+// Deterministic raster-heavy page: 200 cards with gradients, shadows, text.
+const words='lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua'.split(' ');
+let h='';for(let i=0;i<200;i++){let t='';for(let j=0;j<60;j++)t+=words[(i*7+j*3)%words.length]+' ';
+h+=`<div class="card"><h2>Card ${i}</h2><div class="row"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><p>${t}</p></div>`}
+document.body.innerHTML=h;
+</script>

@@ -1,0 +1,23 @@
+# Keep one windowless Chromium running so the Browser, YouTube and other web
+# app tiles open a window in ~0.8 s instead of cold-starting (~2.3 s).
+# Every later `chromium` / omarchy-launch-webapp call hands off to this
+# process (same profile and chromium-flags.conf, incl. the GPU launcher).
+# Install: ~hypr/.config/systemd/user/, then
+#   systemctl --user enable --now tablet-chromium-warm.service
+[Unit]
+Description=Pre-started windowless Chromium (fast browser/web-app launch)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# --keep-alive-for-test: stay running with no windows (closing the last
+# window then keeps the browser warm instead of exiting).
+ExecStart=/usr/bin/chromium --no-startup-window --keep-alive-for-test
+Restart=always
+RestartSec=10
+# Let the kernel reclaim it before interactive apps under memory pressure.
+OOMScoreAdjust=300
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target

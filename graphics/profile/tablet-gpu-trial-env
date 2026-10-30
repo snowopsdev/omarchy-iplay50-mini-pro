@@ -1,0 +1,16 @@
+# Sourced only by the compositor wrapper. App services retain 20-tablet.
+if test -e /run/tablet-gpu-trial || test -e /opt/omarchy-tablet/gpu/enabled; then
+  unset LIBGL_ALWAYS_SOFTWARE
+  unset MESA_GLES_VERSION_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_EXTENSION_OVERRIDE
+  export GALLIUM_DRIVER=zink
+  # Select KMS GBM allocation; Zink supplies the hardware renderer.
+  export GBM_ALWAYS_SOFTWARE=1
+  export VK_DRIVER_FILES=/opt/omarchy-tablet/gpu/panvk-fourfect/share/vulkan/icd.d/panfrost_icd.aarch64.json
+  export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1
+  export PANVK_KBASE_USER_CACHE_SYNC=0
+  export AQ_TABLET_ZINK_PRIMARY=1
+  export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/gpu/aq-primary-zink.so
+else
+  unset VK_DRIVER_FILES PAN_I_WANT_A_BROKEN_VULKAN_DRIVER
+  unset PANVK_KBASE_USER_CACHE_SYNC AQ_TABLET_ZINK_PRIMARY
+fi

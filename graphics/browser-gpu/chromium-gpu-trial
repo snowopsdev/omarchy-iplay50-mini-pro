@@ -1,0 +1,36 @@
+#!/bin/bash
+# Isolated, opt-in GPU trial; never changes the user's normal Chromium profile.
+set -euo pipefail
+if [[ ${TABLET_CHROMIUM_GPU_TRIAL:-0} != 1 ]]; then
+  echo 'This unvalidated trial requires TABLET_CHROMIUM_GPU_TRIAL=1.' >&2
+  exit 2
+fi
+if (( EUID == 0 )); then
+  echo 'Run as the desktop user, with the normal Chromium sandbox.' >&2
+  exit 2
+fi
+for arg in "$@"; do
+  case "$arg" in
+    --no-sandbox*|--disable-gpu-sandbox*|--disable-setuid-sandbox*|--disable-namespace-sandbox*|--disable-seccomp-filter-sandbox*|--single-process*|--in-process-gpu*)
+      echo 'The GPU trial must retain Chromium process isolation and sandboxing.' >&2
+      exit 2
+      ;;
+  esac
+done
+icd=${TABLET_CHROMIUM_ICD:-/opt/omarchy-tablet/gpu/panvk-fourfect/share/vulkan/icd.d/panfrost_icd.aarch64.json}
+browser=/usr/lib/chromium/chromium
+[[ -r $icd && -x $browser ]]
+[[ -r /dev/mali0 && -w /dev/mali0 && -r /dev/dma_heap/system && -w /dev/dma_heap/system ]]
+unset LD_PRELOAD LD_LIBRARY_PATH LIBGL_ALWAYS_SOFTWARE VK_ICD_FILENAMES
+unset MESA_LOADER_DRIVER_OVERRIDE MESA_GLES_VERSION_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_EXTENSION_OVERRIDE
+unset AQ_TABLET_ZINK_PRIMARY AQ_TABLET_SOFTWARE_PRIMARY TABLET_FINISH_SOFTWARE_FRAMES
+export GALLIUM_DRIVER=zink GBM_ALWAYS_SOFTWARE=1
+export VK_DRIVER_FILES="$icd"
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 PANVK_KBASE_USER_CACHE_SYNC=0
+profile=${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/chromium-gpu-trial
+mkdir -p "$profile"
+if (( $# == 0 )); then set -- chrome://gpu; fi
+exec "$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+  --ozone-platform=wayland --use-gl=angle --use-angle=gles-egl \
+  --disable-features=Vulkan,SkiaGraphite --enable-gpu-rasterization \
+  --enable-logging=stderr "$@"

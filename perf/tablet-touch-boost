@@ -1,0 +1,60 @@
+#!/usr/bin/python3
+"""Touch boost: what Android's power HAL does on every touch.
+
+schedutil lets idle cores fall to 500/725 MHz, so the first frames of each
+interaction (shell surfaces, Chromium raster) render while the clock ramps.
+While the touchscreen is active, and for HOLD seconds after the last event,
+raise both clusters' scaling_min_freq; then restore the original minimums.
+Reads the touch device without grabbing it (input is unaffected). Root only.
+"""
+import glob, os, select, signal, sys, time
+
+HOLD = 1.2
+BOOST = {0: 1500000, 6: 1800000}          # policy -> kHz floor while touching
+POLICY = '/sys/devices/system/cpu/cpufreq/policy%d/scaling_min_freq'
+
+def touch_device():
+    for path in glob.glob('/sys/class/input/event*/device/name'):
+        if open(path).read().strip() == 'mtk-tpd':
+            return '/dev/input/' + path.split('/')[4]
+    sys.exit('mtk-tpd not found')
+
+def write(policy, khz):
+    with open(POLICY % policy, 'w') as f:
+        f.write(str(khz))
+
+original = {p: int(open(POLICY % p).read()) for p in BOOST}
+boosted = False
+
+def set_boost(on):
+    global boosted
+    if on == boosted:
+        return
+    for p, khz in BOOST.items():
+        write(p, khz if on else original[p])
+    boosted = on
+
+def stop(*_):
+    set_boost(False)
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+fd = os.open(touch_device(), os.O_RDONLY | os.O_NONBLOCK)
+deadline = 0.0
+try:
+    while True:
+        timeout = max(0.0, deadline - time.monotonic()) if boosted else None
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if ready:
+            try:
+                while os.read(fd, 24 * 64):
+                    pass
+            except BlockingIOError:
+                pass
+            set_boost(True)
+            deadline = time.monotonic() + HOLD
+        elif boosted and time.monotonic() >= deadline:
+            set_boost(False)
+finally:
+    set_boost(False)

@@ -1,0 +1,12 @@
+[Unit]
+Description=Tablet touch boost (raise CPU floor while the screen is touched)
+After=omarchy-hw.service
+
+[Service]
+ExecStart=/opt/omarchy-tablet/perf/tablet-touch-boost
+Restart=on-failure
+RestartSec=2
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

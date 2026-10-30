@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Public-repo adaptation: uses the shared SSH helper tools/tablet; not re-run against the device.
+# Run a quickshell subcommand against the tablet's live Omarchy shell:
+#   shell-plugin/qs log | shell-plugin/qs ipc call shell listPlugins
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+sub=$1; shift
+exec "$REPO/tools/tablet" "runuser -u hypr -- env XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 LANG=C.UTF-8 quickshell $sub -p /opt/omarchy-tablet/omarchy-runtime/shell $*"

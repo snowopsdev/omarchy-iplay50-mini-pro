@@ -1,0 +1,531 @@
+diff -ruN a/config.mobintl.h b/config.mobintl.h
+--- a/config.mobintl.h	2026-07-24 17:16:05.000000000 -0400
++++ b/config.mobintl.h	2026-10-28 19:00:16.870408948 -0400
+@@ -3,7 +3,7 @@
+ 
+ #define DEFAULT_FONT "Sans 14"
+ #define DEFAULT_ROUNDING 5
+-#define SHIFT_SPACE_IS_TAB
++/* Shift+Space remains Shift+Space for Omarchy shortcuts. */
+ static const int transparency = 255;
+ 
+ struct clr_scheme schemes[] = {
+diff -ruN a/keyboard.c b/keyboard.c
+--- a/keyboard.c	2026-07-24 17:16:05.000000000 -0400
++++ b/keyboard.c	2026-10-28 19:02:51.632717725 -0400
+@@ -323,6 +323,14 @@
+             }
+         }
+ 
++        /* Forced shortcut modifiers must be released too. They were never
++         * latched into kb->mods; omitting them leaves Super/Alt stuck down. */
++        uint32_t forced = kb->last_press->type == Code
++                            ? kb->last_press->code_mod & ~kb->mods : 0;
++        if (forced)
++            zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, forced,
++                                            WL_KEYBOARD_KEY_STATE_RELEASED);
++
+         if (unlatch_shift) {
+             if (kb->debug) fprintf(stderr, "unlatch shift");
+             kb->mods ^= Shift;
+@@ -345,10 +353,13 @@
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, AltGr, WL_KEYBOARD_KEY_STATE_RELEASED);
+         }
+ 
+-        if (unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
++        if (forced||unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
+             zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
+         }
+ 
++        /* Deliver key-up before doing any CPU-rendered visual feedback. */
++        wl_display_flush(wl_proxy_get_display((struct wl_proxy *)kb->vkbd));
++
+         if (kb->compose >= 2) {
+             kb->compose = 0;
+             kbd_switch_layout(kb, kb->last_abc_layout, kb->last_abc_index);
+@@ -363,6 +374,21 @@
+ }
+ 
+ void
++kbd_reset_state(struct kbd *kb, uint32_t time)
++{
++    if (!kb->vkbd)
++        return;
++    kbd_release_key(kb, time);
++    zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, kb->mods,
++                                    WL_KEYBOARD_KEY_STATE_RELEASED);
++    kb->mods = kb->compose = 0;
++    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, 0, 0, 0, 0);
++    wl_display_flush(wl_proxy_get_display((struct wl_proxy *)kb->vkbd));
++    if (kb->layout && kb->surf)
++        kbd_draw_layout(kb);
++}
++
++void
+ kbd_release_key(struct kbd *kb, uint32_t time)
+ {
+     kbd_unpress_key(kb, time);
+@@ -427,6 +453,11 @@
+     }
+ 
+     switch (k->type) {
++    case Action:
++        kbd_reset_state(kb, time);
++        if (kb->action && k->action)
++            kb->action(k->action);
++        break;
+     case Code:
+         if (k->code_mod) {
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, k->code_mod, WL_KEYBOARD_KEY_STATE_PRESSED);
+@@ -435,13 +466,12 @@
+                                                   0);
+             } else {
+                 zwp_virtual_keyboard_v1_modifiers(
+-                    kb->vkbd, kb->mods ^ k->code_mod, 0, 0, 0);
++                    kb->vkbd, kb->mods | k->code_mod, 0, 0, 0);
+             }
+         } else {
+             zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
+         }
+         kb->last_swipe = kb->last_press = k;
+-        kbd_draw_key(kb, k, Press);
+         if ((kb->shift_space_is_tab) && (k->code == KEY_SPACE) && (kb->mods & Shift)) {
+             // shift space is tab
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, Shift, WL_KEYBOARD_KEY_STATE_RELEASED);
+@@ -452,6 +482,8 @@
+             zwp_virtual_keyboard_v1_key(kb->vkbd, time, kb->last_press->code,
+                                         WL_KEYBOARD_KEY_STATE_PRESSED);
+         }
++        wl_display_flush(wl_proxy_get_display((struct wl_proxy *)kb->vkbd));
++        kbd_draw_key(kb, k, Press);
+         if (kb->print || kb->print_intersect)
+             kbd_print_key_stdout(kb, k);
+         if (kb->compose) {
+@@ -629,6 +661,9 @@
+ void
+ kbd_draw_key(struct kbd *kb, struct key *k, enum key_draw_type type)
+ {
++    if (!kb->surf || !kb->surf->back_buffer || !kb->surf->back_buffer->cairo)
++        return;
++
+     const char *label = ((kb->mods & Shift)||((kb->mods & CapsLock) && 
+         strlen(k->label) == 1 && isalpha(k->label[0]))) ? k->shift_label : k->label;
+     if (kb->debug)
+@@ -689,6 +724,9 @@
+ void
+ kbd_draw_layout(struct kbd *kb)
+ {
++    if (!kb->surf || !kb->surf->back_buffer || !kb->surf->back_buffer->cairo)
++        return;
++
+     struct drwsurf *d = kb->surf;
+     struct key *next_key = kb->layout->keys;
+     if (kb->debug)
+diff -ruN a/keyboard.h b/keyboard.h
+--- a/keyboard.h	2026-07-24 17:16:05.000000000 -0400
++++ b/keyboard.h	2026-10-28 19:00:16.870255415 -0400
+@@ -14,6 +14,7 @@
+ 
+ enum key_type {
+ 	Pad = 0, // Padding, not a pressable key
++	Action,  // Fixed tablet action handled by the client
+ 	Code,    // A normal key emitting a keycode
+ 	Mod,     // A modifier key
+ 	Copy,    // Copy key, copies the unicode value specified in code (creates and
+@@ -76,6 +77,7 @@
+ 	                         // key
+ 	const uint32_t code_mod; /* modifier to force when this key is pressed */
+ 	uint8_t scheme;          // index of the scheme to use
++	const char *action;     // fixed action name, never interpreted as shell text
+ 	bool reset_mod;          /* reset modifiers when clicked */
+ 
+ 	// actual coordinates on the surface (pixels), will be computed automatically
+@@ -92,6 +94,7 @@
+ };
+ 
+ struct kbd {
++	void (*action)(const char *name);
+ 	bool debug;
+ 	bool show_popup;
+ 	bool show_highlight;
+@@ -140,6 +143,7 @@
+ size_t kbd_get_layer_index(struct kbd *kb, struct layout *l);
+ void kbd_unpress_key(struct kbd *kb, uint32_t time);
+ void kbd_release_key(struct kbd *kb, uint32_t time);
++void kbd_reset_state(struct kbd *kb, uint32_t time);
+ void kbd_motion_key(struct kbd *kb, uint32_t time, uint32_t x, uint32_t y);
+ void kbd_press_key(struct kbd *kb, struct key *k, uint32_t time);
+ void kbd_print_key_stdout(struct kbd *kb, struct key *k);
+diff -ruN a/layout.mobintl.h b/layout.mobintl.h
+--- a/layout.mobintl.h	2026-07-24 17:16:05.000000000 -0400
++++ b/layout.mobintl.h	2026-10-29 13:13:53.676722616 -0400
+@@ -11,6 +11,12 @@
+ /* layout declarations */
+ enum layout_id {
+ 	Full = 0,
++	Tablet,
++	TabletSymbols,
++	TabletNav,
++	TabletOmarchy,
++	KidAbc,
++	Kid123,
+ 	FullWide,
+ 	Special,
+ 	SpecialPad,
+@@ -83,7 +89,16 @@
+   keys_compose_cyr_tse[], keys_compose_cyr_che[], keys_compose_cyr_g[],
+   keys_compose_cyr_k[], keys_dialer[], keys_index[];
+ 
++static struct key keys_tablet[], keys_tablet_symbols[], keys_tablet_nav[], keys_tablet_omarchy[];
++static struct key keys_kid_abc[], keys_kid_123[];
++
+ static struct layout layouts[NumLayouts] = {
++  [Tablet] = {keys_tablet, "latin", "tablet", true},
++  [TabletSymbols] = {keys_tablet_symbols, "latin", "tabletsymbols", false},
++  [TabletNav] = {keys_tablet_nav, "latin", "tabletnav", false},
++  [TabletOmarchy] = {keys_tablet_omarchy, "latin", "tabletomarchy", false},
++  [KidAbc] = {keys_kid_abc, "latin", "kidabc", true},
++  [Kid123] = {keys_kid_123, "latin", "kid123", false},
+   [Full] = {keys_full, "latin", "full", true}, // second parameter is the keymap name
+                                          // third parameter is the layout name
+ 										 // last parameter indicates if it's an alphabetical/primary layout
+@@ -1714,3 +1729,5 @@
+   {"", "", 8, Pad},
+   {"", "", 0.0, Last},
+ };
++
++#include "tablet-layouts.h"
+diff -ruN a/main.c b/main.c
+--- a/main.c	2026-07-24 17:16:05.000000000 -0400
++++ b/main.c	2026-10-29 17:07:27.184481095 -0400
+@@ -11,6 +11,7 @@
+ #include <string.h>
+ #include <sys/mman.h>
+ #include <sys/signalfd.h>
++#include <sys/timerfd.h>
+ #include <poll.h>
+ #include <unistd.h>
+ #include <wayland-client-protocol.h>
+@@ -74,6 +75,13 @@
+ static int rounding = DEFAULT_ROUNDING;
+ static bool hidden = false;
+ static bool im_auto = false;
++/* --auto: a text field losing focus hides the keys only if no other field
++ * takes focus within IM_HIDE_DELAY_MS. Moving between fields or apps then
++ * keeps the keyboard up instead of unmapping and remapping it, which resized
++ * the focused app twice (a software re-render each time). */
++#define IM_HIDE_DELAY_MS 180
++static int im_hide_timer = -1;
++static int32_t active_touch_id = -1;
+ 
+ /* event handler prototypes */
+ static void wl_pointer_enter(void *data, struct wl_pointer *wl_pointer,
+@@ -259,6 +267,7 @@
+     touch_y = wl_fixed_to_int(y);
+ 
+     kbd_unpress_key(&keyboard, time);
++    active_touch_id = id;
+ 
+     next_key = kbd_get_key(&keyboard, touch_x, touch_y);
+     if (next_key) {
+@@ -278,7 +287,10 @@
+         return;
+     }
+ 
+-    kbd_release_key(&keyboard, time);
++    if (id == active_touch_id) {
++        kbd_release_key(&keyboard, time);
++        active_touch_id = -1;
++    }
+ }
+ 
+ void
+@@ -294,7 +306,8 @@
+     touch_x = wl_fixed_to_int(x);
+     touch_y = wl_fixed_to_int(y);
+ 
+-    kbd_motion_key(&keyboard, time, touch_x, touch_y);
++    if (id == active_touch_id)
++        kbd_motion_key(&keyboard, time, touch_x, touch_y);
+ }
+ 
+ void
+@@ -305,6 +318,8 @@
+ void
+ wl_touch_cancel(void *data, struct wl_touch *wl_touch)
+ {
++    active_touch_id = -1;
++    kbd_reset_state(&keyboard, 0);
+ }
+ 
+ void
+@@ -513,16 +528,28 @@
+         .preferred_scale = wp_fractional_scale_preferred_scale,
+ };
+ 
++static void
++im_arm_hide(int ms)
++{
++    struct itimerspec t = {0};
++    t.it_value.tv_sec = ms / 1000;
++    t.it_value.tv_nsec = (long)(ms % 1000) * 1000000L;
++    if (im_hide_timer < 0 || timerfd_settime(im_hide_timer, 0, &t, NULL) == -1)
++        if (ms)
++            hide();
++}
++
+ void
+ im_activate(void *data, struct zwp_input_method_v2 *zwp_input_method_v2)
+ {
++    im_arm_hide(0);
+     show();
+ }
+ 
+ void
+ im_deactivate(void *data, struct zwp_input_method_v2 *zwp_input_method_v2)
+ {
+-    hide();
++    im_arm_hide(IM_HIDE_DELAY_MS);
+ }
+ 
+ void
+@@ -723,6 +750,9 @@
+         return;
+     }
+ 
++    active_touch_id = -1;
++    kbd_reset_state(&keyboard, 0);
++
+     if (wfs_draw_surf) {
+         wp_fractional_scale_v1_destroy(wfs_draw_surf);
+         wfs_draw_surf = NULL;
+@@ -807,6 +837,31 @@
+         hide();
+ }
+ 
++/* Fixed argv actions: labels never become shell commands. */
++static void
++tablet_action(const char *name)
++{
++    pid_t child = fork();
++    if (child == 0) {
++        execl("/opt/omarchy-tablet/ui/tablet-ui", "tablet-ui", name, (char *)NULL);
++        _exit(127);
++    }
++}
++
++static void
++show_named_layout(const char *name)
++{
++    kbd_reset_state(&keyboard, 0);
++    show();
++    for (size_t i = 0; i < NumLayouts; ++i) {
++        if (layouts[i].name && strcmp(layouts[i].name, name) == 0) {
++            kbd_switch_layout(&keyboard, &layouts[i],
++                             kbd_get_layer_index(&keyboard, &layouts[i]));
++            return;
++        }
++    }
++}
++
+ void
+ pipewarn()
+ {
+@@ -1120,6 +1175,9 @@
+         die("virtual_keyboard_manager not available\n");
+     }
+ 
++    signal(SIGCHLD, SIG_IGN);
++    keyboard.action = tablet_action;
++
+     // A second round-trip to receive wl_outputs events
+     wl_display_roundtrip(display);
+ 
+@@ -1154,11 +1212,15 @@
+     if (!hidden)
+         show();
+ 
+-    struct pollfd fds[2];
++    struct pollfd fds[3];
+     int WAYLAND_FD = 0;
+     int SIGNAL_FD = 1;
++    int TIMER_FD = 2;
+     fds[WAYLAND_FD].events = POLLIN;
+     fds[SIGNAL_FD].events = POLLIN;
++    fds[TIMER_FD].events = POLLIN;
++    im_hide_timer = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
++    fds[TIMER_FD].fd = im_hide_timer;
+ 
+     fds[WAYLAND_FD].fd = wl_display_get_fd(display);
+     if (fds[WAYLAND_FD].fd == -1) {
+@@ -1170,6 +1232,8 @@
+     sigaddset(&signal_mask, SIGUSR1);
+     sigaddset(&signal_mask, SIGUSR2);
+     sigaddset(&signal_mask, SIGRTMIN);
++    sigaddset(&signal_mask, SIGRTMIN + 1);
++    sigaddset(&signal_mask, SIGRTMIN + 2);
+     sigaddset(&signal_mask, SIGPIPE);
+     if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
+         die("Failed to disable handled signals: %d\n", errno);
+@@ -1181,8 +1245,13 @@
+     }
+ 
+     while (run_display) {
++        /* A roundtrip in a callback can queue events without leaving the FD
++         * readable. Drain them before polling so key-up cannot be stranded. */
++        if (wl_display_dispatch_pending(display) == -1) {
++            die("Failed to dispatch pending Wayland events.\n");
++        }
+         wl_display_flush(display);
+-        poll(fds, 2, -1);
++        poll(fds, im_hide_timer >= 0 ? 3 : 2, -1);
+ 
+         if (fds[WAYLAND_FD].revents & POLLIN)
+             wl_display_dispatch(display);
+@@ -1193,17 +1262,29 @@
+             die("Wayland socket has been disconnected.\n");
+         }
+ 
++        if (im_hide_timer >= 0 && (fds[TIMER_FD].revents & POLLIN)) {
++            uint64_t expirations;
++            if (read(im_hide_timer, &expirations, sizeof(expirations)) > 0)
++                hide();
++        }
++
+         if (fds[SIGNAL_FD].revents & POLLIN) {
+             struct signalfd_siginfo si;
+ 
+             if (read(fds[SIGNAL_FD].fd, &si, sizeof(si)) != sizeof(si))
+                 fprintf(stderr, "Signal read error: %d", errno);
++            else if (si.ssi_signo != SIGPIPE && (im_arm_hide(0), false))
++                ; /* explicit show/hide cancels a pending auto-hide */
+             else if (si.ssi_signo == SIGUSR1)
+                 hide();
+             else if (si.ssi_signo == SIGUSR2)
+                 show();
+             else if (si.ssi_signo == SIGRTMIN)
+                 toggle_visibility();
++            else if (si.ssi_signo == SIGRTMIN + 1)
++                show_named_layout("tabletomarchy");
++            else if (si.ssi_signo == SIGRTMIN + 2)
++                show_named_layout("tablet");
+             else if (si.ssi_signo == SIGPIPE)
+                 pipewarn();
+         }
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile	2026-07-24 17:16:05.000000000 -0400
++++ b/Makefile	2026-10-28 19:01:21.461636059 -0400
+@@ -31,7 +31,7 @@
+ 
+ all: ${BIN} ${DOCS}
+ 
+-$(BUILDDIR)/config.h:
++$(BUILDDIR)/config.h: config.$(LAYOUT).h
+ 	mkdir -p $(BUILDDIR)
+ 	cp config.$(LAYOUT).h $@
+ 
+@@ -45,7 +45,7 @@
+ proto/%-client-protocol.h: proto/%.xml
+ 	wayland-scanner client-header < $? > $@
+ 
+-$(OBJECTS): $(HDRS) $(WVKBD_HEADERS)
++$(OBJECTS): $(HDRS) $(WVKBD_HEADERS) $(BUILDDIR)/config.h
+ 
+ wvkbd-${LAYOUT}: $(BUILDDIR)/config.h $(OBJECTS) layout.${LAYOUT}.h
+ 	$(CC) -o wvkbd-${LAYOUT} $(OBJECTS) $(LDFLAGS)
+diff -ruN a/tablet-layouts.h b/tablet-layouts.h
+--- a/tablet-layouts.h	1969-12-31 19:00:00.000000000 -0500
++++ b/tablet-layouts.h	2026-10-29 13:13:53.677261963 -0400
+@@ -0,0 +1,92 @@
++/* Native tablet layouts. All pages use five rows; keep keys at least 52 logical
++ * pixels high in landscape at the deployment's 260px keyboard height.
++ * Mods latch for one key: tap Super, then the shortcut, no finger chord needed.
++ * Option A shell: every page has a Hide key (third key of the bottom row on
++ * letters/123/Fn; the dock steps aside while typing); Desktop stays on Fn.
++ */
++#define K(t, s, w, c) {t, s, w, Code, c}
++#define S(t, w, c) {t, t, w, Code, c, .scheme = 1}
++#define M(t, w, m) {t, t, w, Mod, m, .scheme = 1}
++#define L(t, w, l) {t, t, w, Layout, .layout = &layouts[l], .scheme = 1}
++#define C(t, w, c, m) {t, t, w, Code, c, .code_mod = m, .reset_mod = true, .scheme = 1}
++#define A(t, w, a) {t, t, w, Action, .action = a, .scheme = 1}
++#define ROW {"", "", 0, EndRow}
++#define DONE {"", "", 0, Last}
++#define TABLET_MOD_ROW S("Esc",1,KEY_ESC), S("Tab",1,KEY_TAB), M("Ctrl",1,Ctrl), M("Alt",1,Alt), M("Super",1.3,Super), S("←",1,KEY_LEFT), S("↓",1,KEY_DOWN), S("↑",1,KEY_UP), S("→",1,KEY_RIGHT), S("⌫",1.3,KEY_BACKSPACE), ROW
++
++static struct key keys_tablet[] = {
++  TABLET_MOD_ROW,
++  K("q","Q",1,KEY_Q), K("w","W",1,KEY_W), K("e","E",1,KEY_E), K("r","R",1,KEY_R), K("t","T",1,KEY_T),
++  K("y","Y",1,KEY_Y), K("u","U",1,KEY_U), K("i","I",1,KEY_I), K("o","O",1,KEY_O), K("p","P",1,KEY_P), ROW,
++  K("a","A",1,KEY_A), K("s","S",1,KEY_S), K("d","D",1,KEY_D), K("f","F",1,KEY_F), K("g","G",1,KEY_G),
++  K("h","H",1,KEY_H), K("j","J",1,KEY_J), K("k","K",1,KEY_K), K("l","L",1,KEY_L), S("Enter",1.5,KEY_ENTER), ROW,
++  M("Shift",1.5,Shift), K("z","Z",1,KEY_Z), K("x","X",1,KEY_X), K("c","C",1,KEY_C), K("v","V",1,KEY_V),
++  K("b","B",1,KEY_B), K("n","N",1,KEY_N), K("m","M",1,KEY_M), K(",","<",1,KEY_COMMA), K(".",">",1,KEY_DOT), ROW,
++  L("123",1.15,TabletSymbols), L("Fn",1,TabletNav), A("Hide",1.7,"keyboard-hide"), K("/","?",1,KEY_SLASH),
++  K("Space","Space",3.6,KEY_SPACE), K("'","\"",1,KEY_APOSTROPHE), K("-","_",1,KEY_MINUS), DONE
++};
++
++static struct key keys_tablet_symbols[] = {
++  TABLET_MOD_ROW,
++  K("1","!",1,KEY_1), K("2","@",1,KEY_2), K("3","#",1,KEY_3), K("4","$",1,KEY_4), K("5","%",1,KEY_5),
++  K("6","^",1,KEY_6), K("7","&",1,KEY_7), K("8","*",1,KEY_8), K("9","(",1,KEY_9), K("0",")",1,KEY_0), ROW,
++  K("`","~",1,KEY_GRAVE), K("-","_",1,KEY_MINUS), K("=","+",1,KEY_EQUAL), K("[","{",1,KEY_LEFTBRACE), K("]","}",1,KEY_RIGHTBRACE),
++  K("\\","|",1,KEY_BACKSLASH), K(";",":",1,KEY_SEMICOLON), K("'","\"",1,KEY_APOSTROPHE), K("/","?",1,KEY_SLASH), S("Enter",1.5,KEY_ENTER), ROW,
++  M("Shift",1.5,Shift), C("!",1,KEY_1,Shift), C("@",1,KEY_2,Shift), C("#",1,KEY_3,Shift), C("$",1,KEY_4,Shift),
++  C("%",1,KEY_5,Shift), C("&",1,KEY_7,Shift), C("*",1,KEY_8,Shift), C("(",1,KEY_9,Shift), C(")",1,KEY_0,Shift), ROW,
++  L("ABC",1.15,Tablet), L("Fn",1,TabletNav), A("Hide",1.7,"keyboard-hide"), K(",","<",1,KEY_COMMA),
++  K("Space","Space",3.6,KEY_SPACE), K(".",">",1,KEY_DOT), S("Del",1,KEY_DELETE), DONE
++};
++
++static struct key keys_tablet_nav[] = {
++  TABLET_MOD_ROW,
++  S("F1",1,KEY_F1), S("F2",1,KEY_F2), S("F3",1,KEY_F3), S("F4",1,KEY_F4), S("F5",1,KEY_F5), S("F6",1,KEY_F6), ROW,
++  S("F7",1,KEY_F7), S("F8",1,KEY_F8), S("F9",1,KEY_F9), S("F10",1,KEY_F10), S("F11",1,KEY_F11), S("F12",1,KEY_F12), ROW,
++  S("Home",1,KEY_HOME), S("End",1,KEY_END), S("PgUp",1,KEY_PAGEUP), S("PgDn",1,KEY_PAGEDOWN), S("Ins",1,KEY_INSERT), S("Del",1,KEY_DELETE), ROW,
++  L("ABC",1.15,Tablet), L("123",1,TabletSymbols), A("Hide",1.5,"keyboard-hide"), L("Desktop",1.3,TabletOmarchy), M("Shift",1.2,Shift), K("Space","Space",2.4,KEY_SPACE), S("Enter",1.3,KEY_ENTER), DONE
++};
++
++static struct key keys_tablet_omarchy[] = {
++  A("Apps",1,"apps"), A("Terminal",1,"terminal"), A("Browser",1,"browser"), A("Files",1,"files"), A("Menu",1,"menu"), ROW,
++  C("Prev win",1,KEY_TAB,Alt|Shift), C("Next win",1,KEY_TAB,Alt), C("Full screen",1,KEY_F,Super), C("Float / tile",1,KEY_T,Super), C("Close",1,KEY_W,Super), ROW,
++  C("Desk 1",1,KEY_1,Super), C("Desk 2",1,KEY_2,Super), C("Desk 3",1,KEY_3,Super), C("Desk 4",1,KEY_4,Super), C("Desk 5",1,KEY_5,Super), ROW,
++  C("Copy",1,KEY_C,Super), C("Paste",1,KEY_V,Super), C("Cut",1,KEY_X,Super), C("Ctrl+A",1,KEY_A,Ctrl), C("Key help",1,KEY_K,Super), ROW,
++  L("ABC",1,Tablet), L("123",1,TabletSymbols), L("Fn",1,TabletNav), A("Rotate",1,"rotate"), A("Auto",1,"auto"), A("Hide",1,"keyboard-hide"), DONE
++};
++/* Kid Mode pages: no Super/Ctrl/Alt (so no Omarchy shortcut can be typed), no
++ * Fn or Desktop page and no action other than Hide. */
++#define KID_ROW S("Esc",1,KEY_ESC), S("Tab",1.2,KEY_TAB), S("←",1,KEY_LEFT), S("↓",1,KEY_DOWN), S("↑",1,KEY_UP), S("→",1,KEY_RIGHT), S("⌫",1.6,KEY_BACKSPACE), ROW
++
++static struct key keys_kid_abc[] = {
++  KID_ROW,
++  K("q","Q",1,KEY_Q), K("w","W",1,KEY_W), K("e","E",1,KEY_E), K("r","R",1,KEY_R), K("t","T",1,KEY_T),
++  K("y","Y",1,KEY_Y), K("u","U",1,KEY_U), K("i","I",1,KEY_I), K("o","O",1,KEY_O), K("p","P",1,KEY_P), ROW,
++  K("a","A",1,KEY_A), K("s","S",1,KEY_S), K("d","D",1,KEY_D), K("f","F",1,KEY_F), K("g","G",1,KEY_G),
++  K("h","H",1,KEY_H), K("j","J",1,KEY_J), K("k","K",1,KEY_K), K("l","L",1,KEY_L), S("Enter",1.5,KEY_ENTER), ROW,
++  M("Shift",1.5,Shift), K("z","Z",1,KEY_Z), K("x","X",1,KEY_X), K("c","C",1,KEY_C), K("v","V",1,KEY_V),
++  K("b","B",1,KEY_B), K("n","N",1,KEY_N), K("m","M",1,KEY_M), K(",","<",1,KEY_COMMA), K(".",">",1,KEY_DOT), ROW,
++  L("123",1.3,Kid123), A("Hide",1.7,"keyboard-hide"), K("/","?",1,KEY_SLASH),
++  K("Space","Space",4.2,KEY_SPACE), K("'","\"",1,KEY_APOSTROPHE), K("-","_",1,KEY_MINUS), DONE
++};
++
++static struct key keys_kid_123[] = {
++  KID_ROW,
++  K("1","!",1,KEY_1), K("2","@",1,KEY_2), K("3","#",1,KEY_3), K("4","$",1,KEY_4), K("5","%",1,KEY_5),
++  K("6","^",1,KEY_6), K("7","&",1,KEY_7), K("8","*",1,KEY_8), K("9","(",1,KEY_9), K("0",")",1,KEY_0), ROW,
++  K("`","~",1,KEY_GRAVE), K("-","_",1,KEY_MINUS), K("=","+",1,KEY_EQUAL), K("[","{",1,KEY_LEFTBRACE), K("]","}",1,KEY_RIGHTBRACE),
++  K("\\","|",1,KEY_BACKSLASH), K(";",":",1,KEY_SEMICOLON), K("'","\"",1,KEY_APOSTROPHE), K("/","?",1,KEY_SLASH), S("Enter",1.5,KEY_ENTER), ROW,
++  M("Shift",1.5,Shift), C("!",1,KEY_1,Shift), C("@",1,KEY_2,Shift), C("#",1,KEY_3,Shift), C("$",1,KEY_4,Shift),
++  C("%",1,KEY_5,Shift), C("&",1,KEY_7,Shift), C("*",1,KEY_8,Shift), C("(",1,KEY_9,Shift), C(")",1,KEY_0,Shift), ROW,
++  L("ABC",1.3,KidAbc), A("Hide",1.7,"keyboard-hide"), K(",","<",1,KEY_COMMA),
++  K("Space","Space",4.2,KEY_SPACE), K(".",">",1,KEY_DOT), S("Del",1,KEY_DELETE), DONE
++};
++#undef KID_ROW
++#undef K
++#undef S
++#undef M
++#undef L
++#undef C
++#undef A
++#undef ROW
++#undef DONE
++#undef TABLET_MOD_ROW

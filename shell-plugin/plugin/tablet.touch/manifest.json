@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "tablet.touch",
+  "name": "Tablet touch shell",
+  "version": "0.1.0",
+  "author": "omarchy-tablet",
+  "description": "Option A touch shell: Home, dock, app handle and Open apps for the tablet port",
+  "kinds": [
+    "menu"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "menu": "TouchShell.qml"
+  }
+}

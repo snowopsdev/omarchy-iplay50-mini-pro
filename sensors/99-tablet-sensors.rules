@@ -1,0 +1,1 @@
+KERNEL=="hf_manager", GROUP="input", MODE="0660"

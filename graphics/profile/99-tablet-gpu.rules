@@ -1,0 +1,2 @@
+# GPU dma-buf allocation for the tablet compositor and render-group clients.
+SUBSYSTEM=="dma_heap", KERNEL=="system", GROUP="render", MODE="0660"

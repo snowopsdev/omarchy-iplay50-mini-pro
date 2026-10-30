@@ -1,0 +1,13 @@
+# Desktop side of the tablet's USB gadget link. Install once:
+#   sudo install -m 644 05-omarchy-tablet.network /etc/systemd/network/ && sudo networkctl reload
+[Match]
+MACAddress=02:a1:b2:c3:d4:02 02:a1:b2:c3:d4:12
+
+[Network]
+Address=172.16.42.2/24
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+# Optional, later: share the desktop's internet with the tablet (gateway/DNS 172.16.42.2 on the tablet side)
+# IPMasquerade=ipv4
+# IPv4Forwarding=yes

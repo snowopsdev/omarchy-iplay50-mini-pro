@@ -1,0 +1,131 @@
+#!/usr/bin/python
+"""SC7A20 / MediaTek HF sensor rotation bridge for this tablet port."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+STATE = Path.home() / '.local/state/omarchy'
+STATE.mkdir(parents=True, exist_ok=True)
+TRANSFORM = STATE / 'tablet-transform'
+AUTO = STATE / 'tablet-autorotate'
+STATUS = Path(os.environ['XDG_RUNTIME_DIR']) / 'tablet-orientation.json'
+
+def saved_transform():
+    try:
+        return int(TRANSFORM.read_text()) % 4
+    except (OSError, ValueError):
+        return 0
+
+def atomic_write(path, value):
+    temp = path.with_suffix('.next')
+    temp.write_text(value)
+    temp.replace(path)
+
+def apply(transform):
+    transform = int(transform)
+    if transform not in range(4):
+        raise ValueError('Invalid orientation')
+    code = ('hl.monitor({output="DSI-1",mode="1200x1920@60",position="0x0",'
+            f'scale=1.5,transform={transform}' + '}); '
+            'hl.config({input={touchdevice={output="DSI-1",'
+            f'transform={transform}' + '}}})')
+    result = subprocess.run(['hyprctl', 'eval', code], capture_output=True, text=True,
+                            timeout=10, check=True)
+    # Lua errors can be returned on stdout with a successful process exit.
+    if 'error' in result.stdout.lower():
+        raise RuntimeError(result.stdout.strip())
+    atomic_write(TRANSFORM, str(transform) + '\n')
+    print(f'Orientation {transform}', flush=True)
+
+def notify(message):
+    subprocess.run(['notify-send', '-t', '2000', 'Tablet rotation', message], check=False)
+
+def candidate(x, y, z):
+    # Android sensor axes: +X toward the right, +Y toward the top, +Z out.
+    # Ignore a tablet lying flat and require a clear dominant axis.
+    if max(abs(x), abs(y)) < 6000 or max(abs(x), abs(y)) < abs(z) * 1.2:
+        return None
+    if abs(x) > abs(y) * 1.35:
+        # Content rotates against the tablet's physical rotation.
+        return 3 if x > 0 else 1
+    if abs(y) > abs(x) * 1.35:
+        return 0 if y > 0 else 2
+    return None
+
+def watch():
+    lock = open(Path(os.environ['XDG_RUNTIME_DIR']) / 'tablet-orientation.lock', 'w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+    fd = os.open('/dev/hf_manager', os.O_RDWR | os.O_NONBLOCK)
+    running = True
+    def stop(*_):
+        nonlocal running
+        running = False
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    command = lambda action: struct.pack('<BBBBqq32x', 1, action, 16, 0, 200000000, 0)
+    pending, since, last_status = None, 0, 0
+    try:
+        os.write(fd, command(1))
+        while running:
+            if not select.select([fd], [], [], .5)[0]:
+                continue
+            data = os.read(fd, 76 * 128)
+            # Drop older queued readings: orientation needs the current sample.
+            if len(data) < 76 or len(data) % 76:
+                continue
+            t, sensor, accuracy, action, x, y, z = struct.unpack_from('<qBBBxiii', data, len(data)-76)
+            if sensor != 1 or action != 0:
+                continue
+            now = time.monotonic()
+            target = candidate(x, y, z)
+            auto = AUTO.exists()
+            if now - last_status >= .5:
+                atomic_write(STATUS, json.dumps(dict(sensor='sc7a20_acc', xyz=[x,y,z],
+                    accuracy=accuracy, candidate=target, transform=saved_transform(), auto=auto)) + '\n')
+                last_status = now
+            if not auto or target is None or target == saved_transform():
+                pending = None
+                continue
+            if target != pending:
+                pending, since = target, now
+            elif now - since >= .8:
+                try:
+                    apply(target)
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    print(f'Rotation failed: {exc}', flush=True)
+                pending, since = None, now
+    finally:
+        os.write(fd, command(0))
+        os.close(fd)
+
+action = sys.argv[1] if len(sys.argv) > 1 else 'status'
+if action == 'watch':
+    watch()
+elif action == 'toggle':
+    AUTO.unlink(missing_ok=True)
+    apply(1 if saved_transform() % 2 == 0 else 0)
+    notify('Manual landscape' if saved_transform() == 1 else 'Manual portrait')
+elif action in ('portrait', 'landscape'):
+    AUTO.unlink(missing_ok=True)
+    apply(0 if action == 'portrait' else 1)
+elif action == 'auto':
+    if AUTO.exists():
+        AUTO.unlink()
+        notify('Automatic rotation off')
+    else:
+        AUTO.touch()
+        notify('Automatic rotation on')
+elif action == 'status':
+    print(STATUS.read_text() if STATUS.exists() else 'Orientation watcher has not started')
+else:
+    raise SystemExit('Usage: tablet-orientation watch|toggle|portrait|landscape|auto|status')

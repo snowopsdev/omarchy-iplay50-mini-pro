@@ -1,0 +1,11 @@
+#!/bin/bash
+# Run as root. This can expose a vendor-kernel bug; root orchestrates each step.
+# Deliberately no loop: inspect kernel logs and tablet health between probes.
+set -euo pipefail
+if (( EUID != 0 )); then echo 'Root is required to create the diagnostic namespace.' >&2; exit 2; fi
+case ${1:-} in compute|gles|gbm) ;; *) echo 'Usage: pidns-probe compute|gles|gbm' >&2; exit 2 ;; esac
+helper=${TABLET_PANVK_TEST_HELPER:-/opt/omarchy-tablet/diagnostics/gpu/test-panvk-tablet.sh}
+[[ -x $helper ]]
+icd=/opt/omarchy-tablet/gpu/panvk-fourfect/share/vulkan/icd.d/panfrost_icd.aarch64.json
+exec unshare --pid --fork --mount-proc -- runuser -u hypr -- \
+  env PANVK_TEST_ICD="$icd" "$helper" "$1"

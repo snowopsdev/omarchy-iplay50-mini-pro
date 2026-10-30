@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+if test -e /opt/omarchy-tablet/gpu/boot-trial; then
+  rm /opt/omarchy-tablet/gpu/boot-trial
+  touch /run/tablet-gpu-trial
+fi

@@ -1,0 +1,204 @@
+#!/bin/sh
+# usb-gadget: configfs USB gadget (CDC-NCM, fallback CDC-ECM) for the omarchy-tablet debug link.
+#   usb-gadget up [ncm|ecm]   create + bind + configure the interface (idempotent)
+#   usb-gadget down           unbind + remove the gadget
+#   usb-gadget watch          supervisor loop: keep it bound, configure IP, restart telnetd,
+#                             fall back NCM -> ECM if the host never brings the carrier up
+#   usb-gadget status
+# Device side: 172.16.42.1/24.  Host side (fixed MACs): see poc/host-usbnet.sh.
+# /omarchy first (initramfs); in the real rootfs /omarchy does not exist and the normal PATH applies
+export PATH=/omarchy/bin:/omarchy/sbin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+CFG=/sys/kernel/config
+G=$CFG/usb_gadget/omarchy
+IP=172.16.42.1; PREFIX=24
+VID=0x1d6b; PID=0x0104                       # Linux Foundation / multifunction composite gadget
+NCM_DEV=02:a1:b2:c3:d4:01; NCM_HOST=02:a1:b2:c3:d4:02
+ECM_DEV=02:a1:b2:c3:d4:11; ECM_HOST=02:a1:b2:c3:d4:12
+STATE=/run/usb-gadget.func
+
+# Environment knobs: USB_GADGET_TELNET=1 (initramfs only: supervise telnetd + log to the ring file),
+#                    USB_GADGET_NET=0 (rootfs: leave IP configuration to systemd-networkd), UDC=<name>.
+ulog() {
+	[ -w /dev/kmsg ] && echo "<${USB_GADGET_KLEVEL:-4}>omarchy-usb: $*" >> /dev/kmsg 2>/dev/null
+	[ "$USB_GADGET_TELNET" = 1 ] && [ -d /run ] && echo "[$(cut -d' ' -f1 /proc/uptime)] usb: $*" >> /run/initramfs.log
+	echo "usb: $*" >&2
+}
+
+find_udc() {
+	local u
+	[ -n "$UDC" ] && { echo "$UDC"; return 0; }
+	[ -e /sys/class/udc/musb-hdrc ] && { echo musb-hdrc; return 0; }
+	for u in /sys/class/udc/*; do
+		[ -e "$u" ] && { basename "$u"; return 0; }
+	done
+	return 1
+}
+
+kick_musb() {              # MediaTek musb quirks (see vendor init.mt6789.usb.rc)
+	[ -w /sys/module/musb_hdrc/parameters/kernel_init_done ] && echo 1 > /sys/module/musb_hdrc/parameters/kernel_init_done 2>/dev/null
+	local f
+	for f in /sys/class/udc/*/device/cmode /sys/devices/platform/soc/mt_usb/cmode; do
+		[ -w "$f" ] && echo 1 > "$f" 2>/dev/null       # 1 = device (non-charge-only) mode
+	done
+}
+
+dev_addr_of()  { [ "$1" = ecm ] && echo $ECM_DEV  || echo $NCM_DEV; }
+host_addr_of() { [ "$1" = ecm ] && echo $ECM_HOST || echo $NCM_HOST; }
+
+iface_of() {               # netdev whose MAC is the device-side address of function $1
+	local want n a
+	want=$(dev_addr_of $1)
+	for n in /sys/class/net/*; do
+		a=$(cat $n/address 2>/dev/null)
+		[ "$a" = "$want" ] && { basename $n; return 0; }
+	done
+	return 1
+}
+
+gadget_create() {          # $1 = ncm|ecm
+	local f=$1 fn
+	mountpoint -q $CFG || mount -t configfs configfs $CFG
+	[ -d $CFG/usb_gadget ] || { [ -e /tmp/.usb-nocfg ] || { : > /tmp/.usb-nocfg; ulog "no usb_gadget in configfs (CONFIG_USB_CONFIGFS missing?)"; }; return 1; }
+	mkdir -p $G || return 1
+	echo $VID > $G/idVendor; echo $PID > $G/idProduct
+	echo 0x0200 > $G/bcdUSB; echo 0x0100 > $G/bcdDevice
+	echo 0xEF > $G/bDeviceClass; echo 0x02 > $G/bDeviceSubClass; echo 0x01 > $G/bDeviceProtocol
+	mkdir -p $G/strings/0x409
+	echo omarchy-tablet > $G/strings/0x409/serialnumber
+	echo Omarchy > $G/strings/0x409/manufacturer
+	echo "Omarchy tablet USB debug link" > $G/strings/0x409/product
+	mkdir -p $G/configs/c.1/strings/0x409
+	echo "CDC $f" > $G/configs/c.1/strings/0x409/configuration
+	echo 500 > $G/configs/c.1/MaxPower
+	fn=$G/functions/$f.usb0
+	mkdir -p $fn || { ulog "cannot create function $f.usb0"; return 1; }
+	echo $(dev_addr_of $f)  > $fn/dev_addr  2>/dev/null
+	echo $(host_addr_of $f) > $fn/host_addr 2>/dev/null
+	ln -s $fn $G/configs/c.1/$f.usb0 || return 1
+	echo $f > $STATE
+	ulog "gadget created with $f (dev $(dev_addr_of $f), host $(host_addr_of $f))"
+}
+
+gadget_bind() {
+	local u cur
+	cur=$(cat $G/UDC 2>/dev/null)
+	[ -n "$cur" ] && return 0
+	u=$(find_udc) || return 1
+	if echo "$u" > $G/UDC 2>/run/usb-bind.err; then
+		ulog "bound to UDC $u"
+		return 0
+	fi
+	ulog "bind to UDC $u failed: $(cat /run/usb-bind.err); dmesg: $(dmesg | tail -n 3 | tr '\n' '|')"
+	return 1
+}
+
+gadget_down() {
+	[ -d $G ] || return 0
+	echo "" > $G/UDC 2>/dev/null
+	rm -f $G/configs/c.1/*.usb0 2>/dev/null
+	rmdir $G/configs/c.1/strings/0x409 $G/configs/c.1 2>/dev/null
+	rmdir $G/functions/*.usb0 2>/dev/null
+	rmdir $G/strings/0x409 2>/dev/null
+	rmdir $G 2>/dev/null
+	ulog "gadget removed"
+}
+
+net_setup() {              # $1 = func
+	local n
+	[ "$USB_GADGET_NET" = 0 ] && return 0
+	n=$(iface_of $1) || return 1
+	ip link set $n up 2>/dev/null
+	ip -4 addr show dev $n 2>/dev/null | grep -q "inet $IP/" || {
+		ip addr add $IP/$PREFIX dev $n 2>/dev/null && ulog "configured $n $IP/$PREFIX"
+	}
+	return 0
+}
+
+carrier_of() { cat /sys/class/net/$(iface_of $1)/carrier 2>/dev/null; }
+
+OMARCHY=${OMARCHY_HOME:-/omarchy}   # where lib/ld-musl, bin/busybox-extras, bin/rescue-shell live (stage1 or builtin)
+BBX=/omarchy/bin/busybox
+RUNDIR=/run/omarchy
+alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+
+start_telnetd() {          # initramfs only (USB_GADGET_TELNET=1). busybox-extras is dynamic (musl): run it via the loader,
+	[ "$USB_GADGET_TELNET" = 1 ] || return 0       # so nothing is needed in /lib (Android's /lib is not ours)
+	mkdir -p $RUNDIR
+	alive $RUNDIR/telnetd.pid && return 0
+	if [ -f $OMARCHY/lib/ld-musl-aarch64.so.1 ]; then
+		LD_LIBRARY_PATH=$OMARCHY/lib $OMARCHY/lib/ld-musl-aarch64.so.1 $OMARCHY/bin/busybox-extras telnetd -F -l $OMARCHY/bin/rescue-shell \
+			< /dev/null > /dev/null 2>> $RUNDIR/telnetd.err &
+		echo $! > $RUNDIR/telnetd.pid
+		sleep 1
+		if alive $RUNDIR/telnetd.pid; then [ -e $RUNDIR/telnetd.up ] || { : > $RUNDIR/telnetd.up; ulog "telnetd listening on :23"; }; return 0; fi
+		[ -e $RUNDIR/telnetd.fail ] || { : > $RUNDIR/telnetd.fail; ulog "telnetd failed: $(tail -n 2 $RUNDIR/telnetd.err 2>/dev/null | tr '\n' '|')"; }
+	fi
+	# fallback: raw root shell over TCP 2323 using the static busybox nc
+	alive $RUNDIR/nc.pid || {
+		$BBX nc -lk -p 2323 -e $OMARCHY/bin/rescue-shell < /dev/null > /dev/null 2>&1 &
+		echo $! > $RUNDIR/nc.pid; ulog "fallback nc shell on :2323"
+	}
+}
+
+cmd_up() {
+	local f=${1:-ncm}
+	kick_musb
+	[ -d $G ] || gadget_create $f || return 1
+	gadget_bind
+	net_setup $(cat $STATE 2>/dev/null || echo $f)
+}
+
+cmd_status() {
+	echo "func: $(cat $STATE 2>/dev/null)  UDC(bound): '$(cat $G/UDC 2>/dev/null)'  udc: $(ls /sys/class/udc 2>&1 | tr '\n' ' ')"
+	for u in /sys/class/udc/*; do [ -e $u ] && echo "udc $(basename $u) state=$(cat $u/state 2>/dev/null) speed=$(cat $u/current_speed 2>/dev/null)"; done
+	for n in $(ls /sys/class/net); do echo "net $n mac=$(cat /sys/class/net/$n/address 2>/dev/null) carrier=$(cat /sys/class/net/$n/carrier 2>/dev/null) oper=$(cat /sys/class/net/$n/operstate 2>/dev/null)"; done
+	ip -o -4 addr 2>/dev/null
+}
+
+cmd_watch() {
+	local tick=0 f udc state nocarrier=0 swaps=0 forced=0 last= cur
+	while :; do
+		kick_musb
+		f=$(cat $STATE 2>/dev/null)
+		if [ -z "$f" ] && [ -d $G ]; then          # gadget made by the initramfs: adopt it
+			f=$(ls $G/functions 2>/dev/null | sed -n 's/\..*//p' | head -n1)
+			[ -n "$f" ] && { echo $f > $STATE; ulog "adopted existing gadget ($f), UDC='$(cat $G/UDC 2>/dev/null)'"; }
+		fi
+		[ -d $G ] && [ -n "$f" ] || { gadget_down; gadget_create ncm; f=ncm; }
+		gadget_bind
+		net_setup $f
+		start_telnetd
+		udc=$(find_udc) && state=$(cat /sys/class/udc/$udc/state 2>/dev/null) || state=no-udc
+		cur="$f/$udc/$state/carrier=$(carrier_of $f)"
+		[ "$cur" != "$last" ] && { ulog "status: $cur"; last=$cur; }
+		if [ "$USB_GADGET_TELNET" = 1 ] && { [ "$state" = configured ] || [ "$(carrier_of $f)" = 1 ]; }; then
+			mkdir -p $RUNDIR; [ -e $RUNDIR/usb-ok ] || { : > $RUNDIR/usb-ok; ulog "USB host session seen (state=$state)"; }
+		fi
+		# host enumerated us but never enabled the data interface: try the other function
+		if [ "$state" = configured ] && [ "$(carrier_of $f)" != 1 ]; then
+			nocarrier=$((nocarrier + 1))
+		else
+			nocarrier=0
+		fi
+		if [ $nocarrier -ge 8 ] && [ $swaps -lt 4 ]; then
+			swaps=$((swaps + 1)); nocarrier=0
+			[ "$f" = ncm ] && f=ecm || f=ncm
+			ulog "configured but no carrier -> switching to $f (swap $swaps)"
+			gadget_down; gadget_create $f; gadget_bind
+		fi
+		# no host session after a while: force MUSB on once (vendor musb_force_on knob)
+		if [ $tick -ge 15 ] && [ $forced = 0 ] && [ "$state" != configured ] && [ -w /sys/module/musb_hdrc/parameters/musb_force_on ]; then
+			forced=1; echo 1 > /sys/module/musb_hdrc/parameters/musb_force_on 2>/dev/null; ulog "state=$state after ${tick}s: set musb_force_on=1"
+		fi
+		tick=$((tick + 1))
+		if [ "$(carrier_of $f)" = 1 ]; then sleep 10; else sleep 2; fi
+	done
+}
+
+case "$1" in
+	up) cmd_up "$2" ;;
+	down) gadget_down ;;
+	watch) cmd_watch ;;
+	status) cmd_status ;;
+	*) echo "usage: usb-gadget up [ncm|ecm] | down | watch | status" >&2; exit 2 ;;
+esac

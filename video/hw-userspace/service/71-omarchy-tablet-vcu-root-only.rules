@@ -1,0 +1,3 @@
+# The vendor driver accepts unsafe unadapted MMAP clients. Keep this platform
+# decoder restricted until a validated adapter or driver guard is deployed.
+SUBSYSTEM=="video4linux", KERNELS=="16000000.vdec", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"

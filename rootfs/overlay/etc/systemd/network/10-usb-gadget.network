@@ -1,0 +1,21 @@
+# USB gadget link to the desktop (CDC-NCM or CDC-ECM, created in the initramfs / omarchy-usb-gadget.service).
+# Matched by name (usb*, enx*) AND by the fixed device-side MACs, so a random USB NIC never gets this address.
+[Match]
+Name=usb* enx*
+MACAddress=02:a1:b2:c3:d4:01 02:a1:b2:c3:d4:11
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+Address=172.16.42.1/24
+DNS=172.16.42.2
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+
+[Route]
+Gateway=172.16.42.2
+Metric=1024

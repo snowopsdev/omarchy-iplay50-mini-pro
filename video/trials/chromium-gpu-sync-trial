@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+exec env LP_NUM_THREADS=0 TABLET_V4L2_BRIDGE=1 TABLET_V4L2_BRIDGE_PROCESS=gpu TABLET_V4L2_CAPTURE_HEADROOM=8 TABLET_V4L2_DECOUPLE_CAPTURE=1 TABLET_V4L2_POLL_BACKPRESSURE=1 \
+  LD_PRELOAD=/opt/omarchy-tablet/video/probes/mt6789-v4l2-bridge.so:/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/aq-software-primary.so \
+  "$@"

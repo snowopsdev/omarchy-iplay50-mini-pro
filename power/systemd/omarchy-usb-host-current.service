@@ -1,0 +1,19 @@
+[Unit]
+Description=Temporary tablet USB SDP input-current ceiling
+After=omarchy-hw.service
+
+[Service]
+Type=simple
+ExecStart=/opt/omarchy-tablet/diagnostics/usb-host-current.py
+ExecStopPost=/opt/omarchy-tablet/diagnostics/usb-host-current.py --restore
+RuntimeDirectory=omarchy-usb-current
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+UMask=0077
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=8
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

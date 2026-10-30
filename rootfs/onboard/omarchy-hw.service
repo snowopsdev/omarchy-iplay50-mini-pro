@@ -1,0 +1,17 @@
+[Unit]
+Description=Omarchy tablet vendor hardware bring-up (modules, Wi-Fi, Bluetooth)
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Before=network-pre.target bluetooth.service wpa_supplicant@wlan0.service sysinit.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/omarchy-tablet/hw-up.sh
+TimeoutStartSec=180
+# The WMT launcher and Bluetooth bridge daemons live in this unit's cgroup.
+KillMode=process
+
+[Install]
+WantedBy=sysinit.target

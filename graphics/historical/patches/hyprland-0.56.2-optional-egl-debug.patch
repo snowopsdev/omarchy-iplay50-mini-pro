@@ -1,0 +1,22 @@
+--- a/src/render/OpenGL.cpp	2026-10-28 13:08:10.212428173 -0400
++++ b/src/render/OpenGL.cpp	2026-10-28 13:08:10.221293887 -0400
+@@ -299,7 +299,8 @@
+     loadGLProc(&m_proc.eglQueryDmaBufFormatsEXT, "eglQueryDmaBufFormatsEXT");
+     loadGLProc(&m_proc.eglQueryDmaBufModifiersEXT, "eglQueryDmaBufModifiersEXT");
+     loadGLProc(&m_proc.glEGLImageTargetTexture2DOES, "glEGLImageTargetTexture2DOES");
+-    loadGLProc(&m_proc.eglDebugMessageControlKHR, "eglDebugMessageControlKHR");
++    // optional: Arm libmali (r32) does not export EGL_KHR_debug; only used when debug:gl_debugging is set
++    m_proc.eglDebugMessageControlKHR = (decltype(m_proc.eglDebugMessageControlKHR))eglGetProcAddress("eglDebugMessageControlKHR");
+     loadGLProc(&m_proc.eglGetPlatformDisplayEXT, "eglGetPlatformDisplayEXT");
+     loadGLProc(&m_proc.eglCreateSyncKHR, "eglCreateSyncKHR");
+     loadGLProc(&m_proc.eglDestroySyncKHR, "eglDestroySyncKHR");
+@@ -319,8 +320,7 @@
+     }
+ 
+     static const auto GLDEBUG = CConfigValue<Config::INTEGER>("debug:gl_debugging");
+-    if (EGLEXTENSIONS.contains("EGL_KHR_debug") && *GLDEBUG) {
+-        loadGLProc(&m_proc.eglDebugMessageControlKHR, "eglDebugMessageControlKHR");
++    if (EGLEXTENSIONS.contains("EGL_KHR_debug") && *GLDEBUG && m_proc.eglDebugMessageControlKHR) {
+         static const EGLAttrib debugAttrs[] = {
+             EGL_DEBUG_MSG_CRITICAL_KHR, EGL_TRUE, EGL_DEBUG_MSG_ERROR_KHR, EGL_TRUE, EGL_DEBUG_MSG_WARN_KHR, EGL_TRUE, EGL_DEBUG_MSG_INFO_KHR, EGL_TRUE, EGL_NONE,
+         };

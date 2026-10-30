@@ -1,0 +1,13 @@
+ENTER open /dev/video0 (daemon must already be ready)
+RETURN open fd=3 errno=0
+ENTER REQBUFS type=10 memory=MMAP count=0
+RETURN ret=-1 errno=22 count=0 capabilities=00000000
+ENTER REQBUFS type=10 memory=DMABUF count=0
+RETURN ret=0 errno=0 count=0 capabilities=00000014
+ENTER REQBUFS type=9 memory=MMAP count=0
+RETURN ret=-1 errno=22 count=0 capabilities=00000000
+ENTER REQBUFS type=9 memory=DMABUF count=0
+RETURN ret=0 errno=0 count=0 capabilities=00000014
+GUARD PASS: both queues reject MMAP and advertise DMABUF; all requests count=0
+ENTER close
+RETURN close; result=0

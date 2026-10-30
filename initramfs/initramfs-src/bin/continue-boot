@@ -1,0 +1,6 @@
+#!/omarchy/bin/busybox sh
+# Ask PID 1 (/linuxinit in rescue mode) to retry: find/mount userdata and switch_root.
+#   continue-boot       honours /newroot/.stay-in-initramfs
+#   continue-boot -f    removes that flag first (needs /newroot mounted rw)
+[ "$1" = "-f" ] && rm -f /newroot/.stay-in-initramfs
+kill -USR1 1 && echo "SIGUSR1 sent to PID 1; watch /run/initramfs.log (if switch_root succeeds this session ends)"

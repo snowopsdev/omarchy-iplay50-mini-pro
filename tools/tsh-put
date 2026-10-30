@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# tsh-put LOCAL REMOTE [mode]: (named tput in the project; renamed so it does not shadow ncurses tput) copy a file to the tablet's rescue shell over the USB link via netcat.
+set -euo pipefail
+src=$1 dst=$2 mode=${3:-0644}
+T=$(dirname "$0")/tsh
+port=$((20000 + RANDOM % 20000))
+"$T" "rm -f '$dst'; (setsid sh -c 'nc -l -p $port > \"$dst\"' </dev/null >/dev/null 2>&1 &); sleep 1; echo listening" >/dev/null
+socat -u "FILE:$src" "TCP:172.16.42.1:$port,retry=5,interval=0.5"
+sleep 1
+remote=$("$T" "chmod $mode '$dst'; sha256sum '$dst'" | awk '{print $1}')
+local_sum=$(sha256sum "$src" | awk '{print $1}')
+[ "$remote" = "$local_sum" ] && echo "ok $dst ${local_sum:0:16}" || { echo "MISMATCH $dst remote=$remote local=$local_sum"; exit 1; }

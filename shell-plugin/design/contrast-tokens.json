@@ -1,0 +1,222 @@
+{
+  "scope": "Declared opaque base text-token pairs only; excludes disabled opacity, blended colors, inherited actual styles, external host themes and pixel layout. Not a rendered accessibility audit.",
+  "minimum": 6.09,
+  "pairs": [
+    {
+      "palette": "review",
+      "foreground": "fg",
+      "background": "bg",
+      "ratio": 14.95
+    },
+    {
+      "palette": "review",
+      "foreground": "fg",
+      "background": "panel",
+      "ratio": 16.3
+    },
+    {
+      "palette": "review",
+      "foreground": "muted",
+      "background": "bg",
+      "ratio": 6.93
+    },
+    {
+      "palette": "review",
+      "foreground": "muted",
+      "background": "panel",
+      "ratio": 7.55
+    },
+    {
+      "palette": "review",
+      "foreground": "accent",
+      "background": "bg",
+      "ratio": 7.57
+    },
+    {
+      "palette": "review",
+      "foreground": "accent",
+      "background": "panel",
+      "ratio": 8.25
+    },
+    {
+      "palette": "a",
+      "foreground": "fg",
+      "background": "bg",
+      "ratio": 15.48
+    },
+    {
+      "palette": "a",
+      "foreground": "fg",
+      "background": "panel",
+      "ratio": 13.07
+    },
+    {
+      "palette": "a",
+      "foreground": "fg",
+      "background": "panel2",
+      "ratio": 10.86
+    },
+    {
+      "palette": "a",
+      "foreground": "muted",
+      "background": "bg",
+      "ratio": 9.91
+    },
+    {
+      "palette": "a",
+      "foreground": "muted",
+      "background": "panel",
+      "ratio": 8.37
+    },
+    {
+      "palette": "a",
+      "foreground": "muted",
+      "background": "panel2",
+      "ratio": 6.95
+    },
+    {
+      "palette": "a",
+      "foreground": "accent",
+      "background": "bg",
+      "ratio": 11.55
+    },
+    {
+      "palette": "a",
+      "foreground": "accent",
+      "background": "panel",
+      "ratio": 9.75
+    },
+    {
+      "palette": "a",
+      "foreground": "accent",
+      "background": "panel2",
+      "ratio": 8.1
+    },
+    {
+      "palette": "a",
+      "foreground": "accentInk",
+      "background": "accent",
+      "ratio": 10.59
+    },
+    {
+      "palette": "b",
+      "foreground": "fg",
+      "background": "bg",
+      "ratio": 15.45
+    },
+    {
+      "palette": "b",
+      "foreground": "fg",
+      "background": "panel",
+      "ratio": 12.19
+    },
+    {
+      "palette": "b",
+      "foreground": "fg",
+      "background": "panel2",
+      "ratio": 9.08
+    },
+    {
+      "palette": "b",
+      "foreground": "muted",
+      "background": "bg",
+      "ratio": 10.35
+    },
+    {
+      "palette": "b",
+      "foreground": "muted",
+      "background": "panel",
+      "ratio": 8.17
+    },
+    {
+      "palette": "b",
+      "foreground": "muted",
+      "background": "panel2",
+      "ratio": 6.09
+    },
+    {
+      "palette": "b",
+      "foreground": "accent",
+      "background": "bg",
+      "ratio": 12.02
+    },
+    {
+      "palette": "b",
+      "foreground": "accent",
+      "background": "panel",
+      "ratio": 9.48
+    },
+    {
+      "palette": "b",
+      "foreground": "accent",
+      "background": "panel2",
+      "ratio": 7.07
+    },
+    {
+      "palette": "b",
+      "foreground": "accentInk",
+      "background": "accent",
+      "ratio": 10.73
+    },
+    {
+      "palette": "c",
+      "foreground": "fg",
+      "background": "bg",
+      "ratio": 15.26
+    },
+    {
+      "palette": "c",
+      "foreground": "fg",
+      "background": "panel",
+      "ratio": 12.66
+    },
+    {
+      "palette": "c",
+      "foreground": "fg",
+      "background": "panel2",
+      "ratio": 10.48
+    },
+    {
+      "palette": "c",
+      "foreground": "muted",
+      "background": "bg",
+      "ratio": 10.16
+    },
+    {
+      "palette": "c",
+      "foreground": "muted",
+      "background": "panel",
+      "ratio": 8.43
+    },
+    {
+      "palette": "c",
+      "foreground": "muted",
+      "background": "panel2",
+      "ratio": 6.98
+    },
+    {
+      "palette": "c",
+      "foreground": "accent",
+      "background": "bg",
+      "ratio": 10.67
+    },
+    {
+      "palette": "c",
+      "foreground": "accent",
+      "background": "panel",
+      "ratio": 8.85
+    },
+    {
+      "palette": "c",
+      "foreground": "accent",
+      "background": "panel2",
+      "ratio": 7.33
+    },
+    {
+      "palette": "c",
+      "foreground": "accentInk",
+      "background": "accent",
+      "ratio": 9.85
+    }
+  ]
+}

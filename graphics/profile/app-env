@@ -1,0 +1,9 @@
+#!/bin/sh
+# Keep application/sandbox rendering on the validated software profile.
+unset VK_DRIVER_FILES VK_ICD_FILENAMES PAN_I_WANT_A_BROKEN_VULKAN_DRIVER
+unset PANVK_KBASE_USER_CACHE_SYNC AQ_TABLET_ZINK_PRIMARY
+unset MESA_GLES_VERSION_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_EXTENSION_OVERRIDE
+export GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 GBM_ALWAYS_SOFTWARE=1
+export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/aq-software-primary.so
+export UWSM_APP_UNIT_TYPE=service
+exec "$@"

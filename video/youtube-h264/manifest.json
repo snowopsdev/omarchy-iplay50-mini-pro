@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Tablet YouTube playback",
+  "version": "1.1.0",
+  "description": "H.264 playback for the tablet\u2019s validated hardware decoding path.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.youtube.com/*"
+      ],
+      "js": [
+        "codec.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    }
+  ]
+}

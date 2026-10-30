@@ -1,0 +1,14 @@
+--- a/src/panfrost/vulkan/panvk_physical_device.c
++++ b/src/panfrost/vulkan/panvk_physical_device.c
+@@ -1486,6 +1486,11 @@
+    struct vk_device_extension_table supported_extensions;
+    panvk_arch_dispatch(arch, get_physical_device_extensions, device, instance,
+                        &supported_extensions);
++
++   if (pan_env_flag("PANVK_KBASE_NO_SYNCFD")) {
++      supported_extensions.KHR_external_fence_fd = false;
++      supported_extensions.KHR_external_semaphore_fd = false;
++   }
+ 
+    struct vk_features supported_features;
+    panvk_arch_dispatch(arch, get_physical_device_features, instance,

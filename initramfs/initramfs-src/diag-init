@@ -1,0 +1,53 @@
+#!/omarchy/bin/busybox sh
+# stage1-diag: "does stage1 run, and what does it see?" Logs to kmsg (<2>), then warm-reboots to the bootloader after 20 s.
+O=/omarchy
+H=/stage1
+export PATH=$O/bin:$O/sbin
+ST=/run/omarchy
+WAIT=${DIAG_WAIT:-20}
+mkdir -p $ST
+: > $ST/keep-alive                                   # disarm stage0's 60 s timer
+[ -f $ST/stage0-timer.pid ] && kill $(cat $ST/stage0-timer.pid) 2>/dev/null
+[ -w /dev/kmsg ] && exec < /dev/null >> /dev/kmsg 2>&1
+trap 'while :; do sleep 3600; done' EXIT
+d() { [ -w /dev/kmsg ] && echo "<2>omarchy-diag: $*" >> /dev/kmsg 2>/dev/null; }
+dl() { local t=$1 l; while IFS= read -r l; do d "$t: $(echo "$l" | cut -c1-800)"; done; }
+
+# Reboot targets: MTK stores them via syscon-reboot-mode in TOPRGU (0x10007000+0x24, bootloader=3).
+# reboot-mode.ko and syscon-reboot-mode.ko are only in modules.load.recovery, so load them here.
+for m in reboot-mode syscon-reboot-mode; do
+	r=$(insmod /lib/modules/$m.ko 2>&1) && d "insmod $m ok" || d "insmod $m: $r"
+done
+
+d "=== stage1-diag RUNNING (pid $$, $0) $(uname -r) up=$(cut -d' ' -f1 /proc/uptime)"
+d "cmdline: $(cat /proc/cmdline)"
+d "stage0 markers: $(ls $ST | tr '\n' ' ') progress='$(cat $ST/progress 2>/dev/null)'"
+d "stage0 timer pid: $(cat $ST/stage0-timer.pid 2>/dev/null) (killed)"
+d "/stage1: $(ls /stage1 | tr '\n' ' ')"
+d "ls /sys/class/udc: $(ls /sys/class/udc 2>&1 | tr '\n' ' ')"
+for u in /sys/class/udc/*; do [ -e $u ] && d "udc $(basename $u) state=$(cat $u/state 2>&1) speed=$(cat $u/current_speed 2>&1)"; done
+d "musb params: $(for f in /sys/module/musb_hdrc/parameters/*; do [ -f $f ] && echo -n "$(basename $f)=$(cat $f 2>&1) "; done)"
+d "gadget configfs: $(ls /sys/kernel/config/usb_gadget 2>&1 | tr '\n' ' ')"
+d "block devices + PARTNAME:"
+for u in /sys/class/block/*/uevent; do
+	n=$(basename $(dirname $u)); p=$(sed -n 's/^PARTNAME=//p' $u)
+	d "  block $n PARTNAME='$p' $(sed -n 's/^MAJOR=//p' $u):$(sed -n 's/^MINOR=//p' $u)"
+done
+d "proc modules: $(wc -l < /proc/modules)"
+head -n 40 /proc/modules | cut -d' ' -f1 | tr '\n' ' ' | dl modules
+d "mounts:"; dl mounts < /proc/mounts
+d "platform drivers (usb/ufs): $(ls /sys/bus/platform/drivers 2>/dev/null | grep -i -E 'musb|mt_usb|tphy|tcpc|ufs|mtu3' | tr '\n' ' ')"
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+[ -r /sys/kernel/debug/devices_deferred ] && { d "deferred probes:"; head -n 40 /sys/kernel/debug/devices_deferred | dl deferred; }
+d "dmesg tail:"; dmesg 2>/dev/null | tail -n 60 | dl dmesg
+i=0
+while [ $i -lt $WAIT ]; do
+	d "tick $i/$WAIT udc='$(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')' state='$(cat /sys/class/udc/*/state 2>/dev/null | tr '\n' ' ')'"
+	sleep 5; i=$((i + 5))
+done
+d "${WAIT}s elapsed: sync + reboot to bootloader"
+sync
+$H/bin/reboot-bootloader
+d "reboot-bootloader returned rc=$? - reboot -f"
+reboot -f
+while :; do sleep 3600; done

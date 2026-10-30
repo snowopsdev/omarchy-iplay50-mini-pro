@@ -1,0 +1,39 @@
+# Install (see docs/11-power-battery.md): install -m 755 fgd-kernel-mode /opt/omarchy-tablet/fgd-kernel-mode ;
+#   cp this file /etc/systemd/system/ ; systemctl daemon-reload ; systemctl enable --now fgd-kernel-mode
+# Public-repo note: the installed unit was not saved. Per the 2026-10-28 power-session notes it differed from the
+# original draft in three ways, applied here: ExecStart under /opt/omarchy-tablet, After=omarchy-hw.service, and
+# no SuccessExitStatus=2 (a refusal must stay visible).
+# Replaces Android's fuelgauged (+ the handshake part of fuelgauged_nvram).  Sends two netlink messages to the kernel gauge
+# driver and exits; the kernel's own GM3.0 algorithm then maintains battery/capacity.  It writes nothing anywhere.
+[Unit]
+Description=Hand the MediaTek GM3.0 fuel gauge to the in-kernel algorithm (fuelgauged replacement)
+# the battery power_supply is created by mt6358_battery.ko; our initramfs loads it, so only order after udev/modules
+ConditionPathExists=/sys/class/power_supply/battery
+After=systemd-modules-load.service systemd-udev-settle.service omarchy-hw.service
+# make sure no real/other gauge daemon is competing
+Conflicts=fuelgauged.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/omarchy-tablet/fgd-kernel-mode -v --wait 60 --verify 20
+TimeoutStartSec=120
+
+# Hardening: the tool only reads /sys and sends two netlink datagrams.  No capabilities are needed (the kernel's
+# NETLINK_FGD input hook has no capability check - inferred from mtk_battery_netlink_handler); if EPERM shows up in the journal,
+# drop CapabilityBoundingSet= and report it.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_NETLINK
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+# NOTE: do NOT set PrivateNetwork=: the kernel's NETLINK_FGD socket lives in init_net.
+
+[Install]
+WantedBy=multi-user.target

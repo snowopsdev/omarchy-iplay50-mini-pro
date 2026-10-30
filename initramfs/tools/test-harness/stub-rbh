@@ -1,0 +1,4 @@
+#!/omarchy/bin/busybox sh
+echo "STUB reboot-bootloader $* at $(cut -d" " -f1 /proc/uptime)" >> /run/reboot.trace
+echo "<2>STUB reboot-bootloader called $*" >> /dev/kmsg
+exit 1

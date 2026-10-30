@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Public-repo adaptation: uses the shared SSH helper tools/tablet; not re-run against the device.
+# Capture the tablet screen to shell-plugin/shots/<name>.png (git-ignored)
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$REPO/shell-plugin/shots"
+"$REPO/tools/tablet" 'runuser -u hypr -- env XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 grim -' > "$REPO/shell-plugin/shots/${1:-shot}.png"
+echo "$REPO/shell-plugin/shots/${1:-shot}.png"

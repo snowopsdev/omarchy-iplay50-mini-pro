@@ -1,0 +1,14 @@
+diff --git a/src/panfrost/lib/kmod/meson.build b/src/panfrost/lib/kmod/meson.build
+--- a/src/panfrost/lib/kmod/meson.build
++++ b/src/panfrost/lib/kmod/meson.build
+@@ -9,7 +9,9 @@
+   libpankmod_lib_files += files('panfrost_kmod.c')
+ endif
+ 
+-if panfrost_kmds.contains('panthor')
++# The shared Vulkan library includes CSF entrypoints with Panthor helpers,
++# even when only the kbase device-discovery backend is selected.
++if panfrost_kmds.contains('panthor') or panfrost_kmds.contains('kbase')
+   libpankmod_lib_files += files('panthor_kmod.c')
+ endif
+ 

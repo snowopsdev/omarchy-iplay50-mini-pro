@@ -1,0 +1,17 @@
+[Unit]
+Description=Keep the USB gadget debug link (NCM/ECM, 172.16.42.1) alive
+Documentation=file:///usr/local/sbin/omarchy-usb-gadget
+After=sys-kernel-config.mount systemd-modules-load.service
+Wants=sys-kernel-config.mount
+Before=systemd-networkd.service
+
+[Service]
+Type=simple
+# IP address is configured by systemd-networkd (10-usb-gadget.network); the initramfs gadget is adopted, not torn down.
+Environment=USB_GADGET_NET=0
+ExecStart=/usr/local/sbin/omarchy-usb-gadget watch
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

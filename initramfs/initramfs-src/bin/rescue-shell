@@ -1,0 +1,6 @@
+#!/omarchy/bin/busybox sh
+# login program for telnetd: root shell, no password (private USB link only)
+export PATH=/omarchy/bin:/omarchy/sbin HOME=/root TERM=${TERM:-linux} PS1='(initramfs) \w # '
+cd /
+echo "omarchy-tablet initramfs rescue shell. log: /run/initramfs.log   usb-gadget status | continue-boot [-f] | touch /omarchy/etc/no-autoreboot"
+exec /omarchy/bin/busybox sh

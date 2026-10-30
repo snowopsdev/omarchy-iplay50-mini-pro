@@ -1,0 +1,30 @@
+[Unit]
+Description=Native MediaTek VCU runtime for tablet video decoding
+Requires=omarchy-hw.service
+After=local-fs.target systemd-binfmt.service omarchy-hw.service
+ConditionPathExists=/opt/omarchy-tablet/video/runtime/supervisor.py
+
+[Service]
+Type=notify
+NotifyAccess=main
+RuntimeDirectory=omarchy-tablet-vcu
+RuntimeDirectoryMode=0700
+ExecStartPre=/opt/omarchy-tablet/video/runtime/browser-access.py --lock
+ExecStartPre=/opt/omarchy-tablet/video/runtime/native-arm-policy.py --check
+ExecStartPre=/opt/omarchy-tablet/video/prepare-trial.sh
+ExecStart=/opt/omarchy-tablet/video/runtime/supervisor.py
+ExecStartPost=/opt/omarchy-tablet/video/runtime/browser-access.py --grant
+ExecStop=/opt/omarchy-tablet/video/runtime/browser-access.py --lock
+ExecStopPost=/opt/omarchy-tablet/video/runtime/browser-access.py --lock
+TimeoutStartSec=40
+TimeoutStopSec=8
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no
+TasksMax=64
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Public-repo adaptation: uses the shared SSH helper tools/tablet; not re-run against the device.
+# Restart only the tablet's Omarchy shell (bar + plugins); apps keep running.
+# Needed after plugin code changes: keepLoaded plugins are not hot-replaced.
+# Do NOT use stock omarchy-restart-shell here: it relaunches from Hyprland's GPU
+# (Zink) environment and Quickshell then maps blank surfaces. The session
+# autostart wraps the shell in gpu/app-env (llvmpipe); do the same.
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+exec "$REPO/tools/tablet" 'bash -s' <<'REMOTE'
+set -euo pipefail
+u() { runuser -u hypr -- env XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 LANG=C.UTF-8 \
+  HYPRLAND_INSTANCE_SIGNATURE=$(ls -t /run/user/1001/hypr | head -1) "$@"; }
+dir=/opt/omarchy-tablet/omarchy-runtime/shell
+while u timeout 30 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
+for _ in $(seq 100); do pgrep -u hypr -x quickshell >/dev/null || break; sleep 0.1; done
+u hyprctl -q dispatch 'hl.dsp.exec_cmd("/opt/omarchy-tablet/gpu/app-env omarchy-launch-shell")'
+for _ in $(seq 150); do
+  if u quickshell ipc -p "$dir" call shell ping >/dev/null 2>&1; then
+    q=$(pgrep -u hypr -x quickshell | head -1)
+    tr '\0' '\n' < /proc/$q/environ | grep -q '^GALLIUM_DRIVER=llvmpipe$' && { echo "shell restarted (llvmpipe)"; exit 0; }
+    echo "shell restarted WITHOUT software rendering" >&2; exit 1
+  fi
+  sleep 0.2
+done
+echo "shell did not answer" >&2; exit 1
+REMOTE

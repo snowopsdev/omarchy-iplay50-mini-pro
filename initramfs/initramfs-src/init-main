@@ -1,0 +1,397 @@
+#!/omarchy/bin/busybox sh
+# omarchy-tablet initramfs /linuxinit  (Alldocube iPlay 50 mini Pro, MT8781, GKI 5.10)
+# Embedded in the kernel (CONFIG_INITRAMFS_SOURCE, rdinit=/linuxinit); the Android vendor_boot + init_boot ramdisks are
+# unpacked ON TOP of it and replace /bin, /etc, /init with symlinks into /system -> everything we own lives in /omarchy.
+# Only /linuxinit (this file) is outside. Ignore /bin /etc /sbin /init /system: they belong to Android.
+# Goals, in order: (1) USB debug link ASAP, (2) find+mount PARTNAME=userdata, (3) switch_root to systemd.
+# PID 1 must never exit: every failure path ends in rescue_loop. Self-recovery: no USB host + no root within
+# AUTOREBOOT_SECS -> dump state to kmsg (pstore) and warm-reboot into the bootloader (fastboot).
+
+O=/omarchy                       # always-present part (kernel cpio): busybox + applets + etc/no-autoreboot
+case "$0" in /stage1/*) H=/stage1 ;; *) H=/omarchy ;; esac   # where our scripts/helpers/telnetd live (stage1 cpio vs builtin fallback)
+export OMARCHY_HOME=$H
+export PATH=$O/bin:$O/sbin
+export HOME=/root TERM=linux
+BB=$O/bin/busybox
+LOG=/run/initramfs.log
+ST=/run/omarchy                  # state markers: usb-ok root-mounted switch-failed watchdog.pid keep-alive modules-done ...
+NEWROOT=/newroot
+USB_WAIT=${USB_WAIT:-5}
+ROOT_WAIT=${ROOT_WAIT:-100}      # seconds to wait for the userdata partition
+AUTOREBOOT_SECS=${AUTOREBOOT_SECS:-150}   # 0 = never; a file $O/etc/no-autoreboot also disables it
+MODDIR=/lib/modules              # vendor first-stage modules (modules.load, modules.dep)
+NO_DEVTMPFS=0
+RESCUE=0
+RESCUE_WHY=
+
+# ---------------------------------------------------------------- logging (<2> = KERN_CRIT: always reaches console + pstore)
+LOGN=0
+log() {
+	local m="$*"
+	[ -w /dev/kmsg ] && echo "<2>omarchy-init: $m" >> /dev/kmsg 2>/dev/null
+	[ -d /run ] && {
+		echo "[$(cut -d' ' -f1 /proc/uptime 2>/dev/null)] $m" >> $LOG
+		LOGN=$((LOGN + 1))
+		if [ $LOGN -ge 400 ]; then          # ring: keep the last 1500 lines
+			LOGN=0
+			tail -n 1500 $LOG > $LOG.t 2>/dev/null && mv $LOG.t $LOG
+		fi
+	}
+}
+
+# ---------------------------------------------------------------- early mounts (idempotent: stage0 already did most of them)
+ismnt() { if [ -r /proc/mounts ]; then grep -q " $1 " /proc/mounts; else mountpoint -q "$1"; fi; }   # (bind mounts share st_dev)
+mkdir -p /proc /sys /dev /run /tmp /mnt /newroot /root
+ismnt /proc || mount -t proc proc /proc
+ismnt /sys  || mount -t sysfs sysfs /sys
+ismnt /run  || mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+if ! ismnt /dev; then
+	if ! mount -t devtmpfs -o mode=0755 devtmpfs /dev 2>/dev/null; then
+		NO_DEVTMPFS=1                     # kernel without DEVTMPFS: tmpfs /dev + mknod + mdev -s
+		mount -t tmpfs -o mode=0755 tmpfs /dev
+	fi
+fi
+[ -c /dev/null ]    || mknod -m 666 /dev/null c 1 3
+[ -c /dev/kmsg ]    || mknod -m 600 /dev/kmsg c 1 11
+[ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -c /dev/tty ]     || mknod -m 666 /dev/tty c 5 0
+[ -c /dev/zero ]    || mknod -m 666 /dev/zero c 1 5
+[ -c /dev/urandom ] || mknod -m 666 /dev/urandom c 1 9
+mkdir -p /dev/pts /dev/shm
+ismnt /dev/pts || mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts 2>/dev/null
+[ -e /dev/ptmx ] || ln -s pts/ptmx /dev/ptmx
+ismnt /dev/shm || mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null
+ismnt /sys/kernel/config || mount -t configfs configfs /sys/kernel/config 2>/dev/null
+ismnt /tmp  || mount -t tmpfs -o mode=1777 tmpfs /tmp
+mkdir -p $ST /run/mods
+
+# stdio: never touch /dev/console (it may block); everything goes to kmsg (pstore) or nowhere
+if [ -w /dev/kmsg ]; then exec < /dev/null >> /dev/kmsg 2>&1; fi
+echo "8 4 1 7" > /proc/sys/kernel/printk 2>/dev/null           # console_loglevel 8: everything reaches console/pstore
+echo on > /proc/sys/kernel/printk_devkmsg 2>/dev/null           # do not rate-limit our kmsg lines
+cd /
+
+# FIRST ACTION: take over from stage0's unconditional 60 s "reboot to bootloader" timer
+: > $ST/keep-alive
+[ -f $ST/stage0-timer.pid ] && kill $(cat $ST/stage0-timer.pid) 2>/dev/null
+trap 'log "FATAL: init script is exiting - parking PID 1"; while :; do sleep 3600; done' EXIT
+
+log "=== omarchy-tablet init start ($0, H=$H), $(uname -r) ==="
+log "STAGE-1 ENTERED: stage0 timer disarmed (pid $(cat $ST/stage0-timer.pid 2>/dev/null)); markers: $(ls $ST | tr '\n' ' ')"
+# Reboot targets: MTK stores them via syscon-reboot-mode in TOPRGU (0x10007000+0x24, bootloader=3).
+# reboot-mode.ko and syscon-reboot-mode.ko are only in modules.load.recovery, so load them here.
+for m in reboot-mode syscon-reboot-mode; do
+	r=$(insmod /lib/modules/$m.ko 2>&1) && log "insmod $m ok" || log "insmod $m: $r"
+done
+log "devtmpfs=$([ $NO_DEVTMPFS = 0 ] && echo yes || echo NO-fallback-tmpfs+mdev)"
+read CMDLINE < /proc/cmdline
+log "cmdline: $CMDLINE"
+for w in $CMDLINE; do case "$w" in omarchy.autoreboot=*) AUTOREBOOT_SECS=${w#*=} ;; esac; done
+log "autoreboot=${AUTOREBOOT_SECS}s no-autoreboot-file=$([ -e $O/etc/no-autoreboot ] && echo yes || echo no)"
+[ -r /proc/bootconfig ] && log "bootconfig: $(tr '\n' ' ' < /proc/bootconfig | cut -c1-300)"
+[ $NO_DEVTMPFS = 1 ] && { mdev -s 2>/dev/null; log "mdev -s done (fallback)"; }
+# very verbose mode (stage1.cpio ships $H/etc/verbose): xtrace goes to kmsg via stderr; switched off in rescue_loop
+[ -e $H/etc/verbose ] && { PS4='<2>s1+ '; set -x; }
+
+# ---------------------------------------------------------------- module loader
+# Vendor first-stage modules: /lib/modules/modules.load (order) + modules.dep (deps), basenames use hyphens or underscores.
+build_index() {            # basename-keyed dependency + path indexes from modules.dep
+	: > /run/mod.deps; : > /run/mod.paths
+	[ -f $MODDIR/modules.dep ] || return 0
+	awk -v D="$MODDIR" '
+	function bn(p,  n, a) { n = split(p, a, "/"); return a[n] }
+	function full(p) { if (substr(p, 1, 1) == "/") return p; return D "/" p }
+	{
+		k = $1; sub(/:$/, "", k); b = bn(k)
+		print b, full(k) >> "/run/mod.paths"
+		line = b ":"
+		for (i = 2; i <= NF; i++) line = line " " bn($i)
+		print line >> "/run/mod.deps"
+	}' $MODDIR/modules.dep
+}
+
+load_mod() {               # $1 = module file basename (foo.ko); deps first; tolerant
+	local b=$1 d p out rc
+	[ -e /run/mods/$b ] && return 0
+	: > /run/mods/$b
+	for d in $(sed -n "s/^$b: *//p" /run/mod.deps | head -n1); do
+		load_mod $d
+	done
+	p=$(sed -n "s/^$b //p" /run/mod.paths | head -n1)
+	[ -n "$p" ] || p=$MODDIR/$b
+	[ -f "$p" ] || p=$(find $MODDIR -name "$b" 2>/dev/null | head -n1)
+	if [ ! -f "$p" ]; then
+		log "mod $b: file not found ($p)"; rm -f /run/mods/$b; echo $b >> /run/mod.failed; return 1
+	fi
+	out=$(insmod "$p" 2>&1); rc=$?
+	if [ $rc -ne 0 ]; then
+		case "$out" in
+		*"File exists"*) log "mod $b: already present"; return 0 ;;
+		esac
+		log "mod $b: insmod failed rc=$rc: $out"
+		rm -f /run/mods/$b; echo $b >> /run/mod.failed
+		return 1
+	fi
+	log "mod $b: loaded"
+	return 0
+}
+
+module_names() {           # stream of module basenames in load order
+	if [ -f $MODDIR/modules.load ]; then
+		sed -e 's#.*/##' -e '/^[[:space:]]*$/d' -e '/^#/d' $MODDIR/modules.load
+	else
+		sed -e 's#^\([^:]*\):.*#\1#' -e 's#.*/##' $MODDIR/modules.dep
+	fi
+}
+
+USB_RE='musb|mtu3|mt_usb|phy_mtk_tphy|phy_generic|extcon|tcpc|tcpci|pd_dbg|husb|fusb|typec|xhci|usb_boost'   # matched after '-' -> '_'
+
+load_modules() {           # $1 = usb | rest
+	local m n=0
+	[ -f $MODDIR/modules.dep ] || [ -f $MODDIR/modules.load ] || return 0
+	module_names > /run/mod.order
+	while read m; do
+		case "$m" in *.ko) ;; *) m=$m.ko ;; esac
+		if [ "$1" = usb ]; then
+			echo "$m" | tr - _ | grep -Eq "$USB_RE" || continue
+		fi
+		load_mod "$m" && n=$((n + 1))
+	done < /run/mod.order
+	log "load_modules $1: $n ok"
+}
+
+retry_failed() {
+	local m
+	[ -s /run/mod.failed ] || return 0
+	sort -u /run/mod.failed > /run/mod.retry; : > /run/mod.failed
+	log "retrying $(wc -l < /run/mod.retry) failed modules"
+	while read m; do load_mod "$m"; done < /run/mod.retry
+	[ -s /run/mod.failed ] && log "still failing: $(sort -u /run/mod.failed | tr '\n' ' ')"
+}
+
+# ---------------------------------------------------------------- rescue plumbing
+rescue_shell_console() {   # best effort interactive shell on the console (no harm if it fails)
+	(setsid $BB sh -c "exec $BB sh </dev/console >/dev/console 2>&1" &) 2>/dev/null
+}
+
+stop_helpers() {           # kill our background helpers (the kernel USB gadget itself stays configured)
+	local f
+	for f in usb-watch watchdog telnetd nc; do
+		[ -f $ST/$f.pid ] && kill $(cat $ST/$f.pid) 2>/dev/null
+	done
+}
+
+save_log() {               # copy the ring log into the real root, if mounted
+	[ -e $ST/root-mounted ] || return 0
+	mkdir -p $NEWROOT/var/log 2>/dev/null
+	{
+		echo "---- initramfs run $(date 2>/dev/null) uptime=$(cut -d' ' -f1 /proc/uptime) ----"
+		cat $LOG
+		echo "---- /sys/class/udc: $(ls /sys/class/udc 2>&1 | tr '\n' ' ') state: $(cat /sys/class/udc/*/state 2>&1 | tr '\n' ' ') ----"
+		echo "---- usb-gadget status ----"; $H/bin/usb-gadget status 2>&1
+		echo "---- net ----"; ip -o addr 2>&1
+		echo "---- dmesg tail ----"; dmesg 2>/dev/null | tail -n 150
+	} >> $NEWROOT/var/log/initramfs.log 2>/dev/null
+	sync
+}
+
+# ---------------------------------------------------------------- self-recovery (no serial console: pstore is our eyes)
+kdump() {                  # kdump <title>  (stdin -> one kmsg record per line, <=800 chars)
+	local t=$1 l
+	while IFS= read -r l; do
+		[ -w /dev/kmsg ] && echo "<2>omarchy-dump[$t]: $(echo "$l" | cut -c1-800)" >> /dev/kmsg 2>/dev/null
+	done
+}
+
+panic_dump() {
+	log "WATCHDOG: dumping state to kmsg before rebooting into the bootloader"
+	{ echo "markers: $(ls $ST 2>&1 | tr '\n' ' ')"; echo "RESCUE=$RESCUE why=$RESCUE_WHY"; } | kdump state
+	{ [ -s /run/mod.failed ] && sort -u /run/mod.failed; grep -E 'insmod failed|not found|still failing' $LOG | tail -n 40; } 2>&1 | kdump modules
+	{ echo "udc: $(ls /sys/class/udc 2>&1 | tr '\n' ' ')"; for u in /sys/class/udc/*; do [ -e $u ] && echo "$(basename $u) state=$(cat $u/state 2>&1) speed=$(cat $u/current_speed 2>&1)"; done
+	  echo "gadget: $(ls /sys/kernel/config/usb_gadget 2>&1 | tr '\n' ' ') UDC='$(cat /sys/kernel/config/usb_gadget/*/UDC 2>&1)'"
+	  $H/bin/usb-gadget status 2>&1; } | kdump udc
+	{ for f in /sys/module/musb_hdrc/parameters/* /sys/devices/platform/soc/mt_usb/*; do
+		[ -f $f ] && [ -r $f ] && echo "$f = $(head -c 200 $f 2>&1 | head -n 1)"
+	  done
+	  echo "drivers: $(ls /sys/bus/platform/drivers 2>/dev/null | grep -i -E 'musb|mt_usb|tphy|tcpc|xhci|mtu3' | tr '\n' ' ')"
+	  echo "typec: $(ls /sys/class/typec /sys/class/tcpc 2>&1 | tr '\n' ' ')"
+	  mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+	  [ -r /sys/kernel/debug/devices_deferred ] && { echo "deferred probes:"; head -n 40 /sys/kernel/debug/devices_deferred; }
+	} 2>&1 | kdump musb
+	{ echo "block: $(ls /sys/class/block 2>&1 | tr '\n' ' ')"; echo "lsmod: $(lsmod 2>&1 | wc -l) modules"; grep -E 'userdata|mount' $LOG | tail -n 10; } | kdump block
+	dmesg 2>/dev/null | tail -n 60 | kdump dmesg
+}
+
+reboot_bootloader() {
+	log "AUTOREBOOT: sync, remount-ro, reboot(RESTART2,\"bootloader\")"
+	sync
+	[ -e $ST/root-mounted ] && mount -o remount,ro $NEWROOT 2>/dev/null
+	$H/bin/reboot-bootloader $NEWROOT 2>&1 | kdump reboot
+	log "AUTOREBOOT: reboot(2) returned -> staying in rescue"
+}
+
+# Runs in the background. Needs no recovery if a USB host session/carrier was seen, or the root is mounted
+# (and switch_root has not failed). Otherwise after AUTOREBOOT_SECS: dump + reboot into fastboot.
+watchdog_ok() {
+	[ -e $ST/usb-ok ] && return 0
+	[ -e $ST/root-mounted ] && [ ! -e $ST/switch-failed ] && return 0
+	return 1
+}
+start_watchdog() {
+	[ "$AUTOREBOOT_SECS" -gt 0 ] 2>/dev/null || { log "watchdog disabled (AUTOREBOOT_SECS=$AUTOREBOOT_SECS)"; return 0; }
+	[ -f $ST/watchdog.pid ] && kill $(cat $ST/watchdog.pid) 2>/dev/null
+	(
+		i=0
+		while [ $i -lt $AUTOREBOOT_SECS ]; do
+			sleep 1; i=$((i + 1))
+			watchdog_ok && { log "watchdog: ok after ${i}s ($(ls $ST | tr '\n' ' '))"; exit 0; }
+		done
+		[ -e $O/etc/no-autoreboot ] && { log "watchdog: expired but $O/etc/no-autoreboot exists -> not rebooting"; exit 0; }
+		panic_dump
+		reboot_bootloader
+	) &
+	echo $! > $ST/watchdog.pid
+	log "watchdog armed: ${AUTOREBOOT_SECS}s (pid $!)"
+}
+
+# ---------------------------------------------------------------- find + mount userdata
+find_userdata() {          # prints block device node of the PARTNAME=userdata partition
+	local u n devname major minor
+	for u in ${SYSBLOCK:-/sys/class/block}/*/uevent; do
+		grep -qx 'PARTNAME=userdata' $u 2>/dev/null || continue
+		devname=$(sed -n 's/^DEVNAME=//p' $u)
+		major=$(sed -n 's/^MAJOR=//p' $u); minor=$(sed -n 's/^MINOR=//p' $u)
+		[ -n "$devname" ] || devname=$(basename $(dirname $u))
+		[ -b /dev/$devname ] || mknod -m 600 /dev/$devname b $major $minor 2>/dev/null
+		[ -b /dev/$devname ] && { echo /dev/$devname; return 0; }
+	done
+	return 1
+}
+
+wait_for_userdata() {
+	local i=0 dev
+	while [ $i -lt $ROOT_WAIT ]; do
+		[ $NO_DEVTMPFS = 1 ] && mdev -s 2>/dev/null
+		dev=$(find_userdata) && { echo "$dev"; return 0; }
+		i=$((i + 1))
+		[ $((i % 10)) = 0 ] && log "still waiting for userdata (${i}s); block devs: $(ls /sys/class/block 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+		sleep 1
+	done
+	return 1
+}
+
+mount_root() {             # $1 = device
+	local dev=$1 out
+	log "mounting $dev (ext4) on $NEWROOT"
+	out=$(mount -t ext4 -o rw,noatime $dev $NEWROOT 2>&1) || {
+		log "mount failed: $out; kernel: $(dmesg 2>/dev/null | tail -n 5 | tr '\n' '|')"
+		return 1
+	}
+	: > $ST/root-mounted
+	log "mounted $dev: $(grep " $NEWROOT " /proc/mounts)"
+	return 0
+}
+
+do_switch() {              # returns only on failure
+	[ -e $ST/root-mounted ] || { log "switch: no root mounted"; return 1; }
+	if [ ! -x $NEWROOT/sbin/init ] && [ ! -x $NEWROOT/usr/lib/systemd/systemd ]; then
+		log "switch: no /sbin/init in new root"; return 1
+	fi
+	log "STAGE 5: switching root; stopping debug helpers (kernel USB gadget stays configured)"
+	stop_helpers
+	log "final udc=$(ls /sys/class/udc 2>&1 | tr '\n' ' ') state=$(cat /sys/class/udc/*/state 2>&1 | tr '\n' ' ') gadget=$(cat /sys/kernel/config/usb_gadget/*/UDC 2>&1 | tr '\n' ' ')"
+	log "exec switch_root $NEWROOT /sbin/init"
+	save_log
+	mkdir -p $NEWROOT/dev $NEWROOT/proc $NEWROOT/sys
+	mount --move /dev $NEWROOT/dev   || { log "move /dev failed"; return 1; }
+	mount --move /proc $NEWROOT/proc || { log "move /proc failed"; return 1; }
+	mount --move /sys $NEWROOT/sys   || { log "move /sys failed"; return 1; }
+	umount /run /tmp 2>/dev/null
+	exec $O/bin/switch_root $NEWROOT /sbin/init
+	return 1
+}
+
+boot_newroot() {           # mount (if needed) and switch. Returns only on failure.
+	local dev
+	if [ ! -e $ST/root-mounted ]; then
+		dev=$(find_userdata) || { log "userdata partition not found"; return 1; }
+		mount_root $dev || return 1
+	fi
+	if [ -e $NEWROOT/.stay-in-initramfs ]; then
+		log "$NEWROOT/.stay-in-initramfs present -> staying in initramfs"
+		RESCUE=1; RESCUE_WHY=flag-file
+		save_log
+		return 1
+	fi
+	do_switch || { : > $ST/switch-failed; return 1; }
+}
+
+rescue_loop() {            # PID 1 lives here. SIGUSR1 = retry (continue-boot).
+	set +x
+	log "STAGE R: RESCUE ($RESCUE_WHY): staying in initramfs. telnet 172.16.42.1 (root, no password); 'continue-boot' to retry."
+	[ -e $H/etc/console-shell ] && rescue_shell_console   # off by default: /dev/console may block
+	trap 'log "SIGUSR1: retrying boot"; boot_newroot; log "retry failed; still in rescue"' USR1
+	trap 'echo "rescue: ignoring TERM"' TERM
+	while :; do sleep 1; done
+}
+
+# ---------------------------------------------------------------- 1. USB first
+log "STAGE 1: usb"
+start_watchdog
+case " $CMDLINE " in *" rescue "*|*" omarchy.rescue=1 "*) RESCUE=1; RESCUE_WHY=cmdline ;; esac
+grep -qw rescue /proc/bootconfig 2>/dev/null && { RESCUE=1; RESCUE_WHY=bootconfig; }
+[ -e $H/etc/force-rescue ] && { RESCUE=1; RESCUE_WHY=stage1-force-rescue; }   # stage1-rescue.cpio
+
+if [ -f $MODDIR/modules.dep ] || [ -f $MODDIR/modules.load ]; then
+	log "module dir: $MODDIR ($(ls $MODDIR/*.ko 2>/dev/null | wc -l) .ko, modules.load=$([ -f $MODDIR/modules.load ] && wc -l < $MODDIR/modules.load || echo none), modules.dep=$([ -f $MODDIR/modules.dep ] && wc -l < $MODDIR/modules.dep || echo none))"
+	build_index
+else
+	log "NO modules.load/modules.dep in $MODDIR (vendor ramdisk missing?)"
+	ls -l /lib /lib/modules 2>&1 | head -n 20 | while read l; do log "  $l"; done
+fi
+if [ -e $ST/modules-done ]; then
+	log "modules already loaded by stage0 (modules-done marker)"
+else
+	load_modules usb                               # musb/phy/typec chain only, deps first
+fi
+echo 1 > /sys/module/musb_hdrc/parameters/kernel_init_done 2>/dev/null
+
+export USB_GADGET_TELNET=1 USB_GADGET_KLEVEL=2
+$H/bin/usb-gadget watch > /run/usb-watch.out 2>&1 &
+echo $! > $ST/usb-watch.pid
+log "usb-gadget watcher started pid $(cat $ST/usb-watch.pid) (also supervises telnetd)"
+i=0; while [ $i -lt $USB_WAIT ] && [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; do sleep 1; i=$((i + 1)); done
+log "udc after ${i}s: '$(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')'"
+
+# ---------------------------------------------------------------- 2. the rest of the first-stage modules (UFS etc.)
+log "STAGE 2: remaining first-stage modules"
+if [ -e $ST/modules-done ]; then log "skipped (stage0 did it)"; else load_modules rest; retry_failed; fi
+[ $NO_DEVTMPFS = 1 ] && mdev -s 2>/dev/null
+
+# ---------------------------------------------------------------- 3. userdata
+log "STAGE 3: userdata"
+if dev=$(wait_for_userdata); then
+	log "userdata partition: $dev"
+	mount_root $dev || { RESCUE=1; RESCUE_WHY="${RESCUE_WHY:+$RESCUE_WHY,}mount-failed"; }
+else
+	log "userdata partition NOT found after ${ROOT_WAIT}s"
+	RESCUE=1; RESCUE_WHY="${RESCUE_WHY:+$RESCUE_WHY,}no-userdata"
+fi
+
+if [ $RESCUE = 0 ]; then
+	if [ -e $NEWROOT/.stay-in-initramfs ]; then
+		RESCUE=1; RESCUE_WHY=flag-file; log "found $NEWROOT/.stay-in-initramfs"
+	fi
+fi
+if [ $RESCUE = 1 ]; then
+	save_log
+	rescue_loop
+fi
+
+log "STAGE 4: root ok, going to switch_root"
+if ! do_switch; then
+	: > $ST/switch-failed
+	RESCUE=1; RESCUE_WHY="${RESCUE_WHY:+$RESCUE_WHY,}switch-failed"
+	start_watchdog                                   # no USB session either -> still reboot to fastboot
+fi
+rescue_loop

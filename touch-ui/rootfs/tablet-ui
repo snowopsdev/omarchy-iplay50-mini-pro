@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Touch controls for the tablet's Hyprland session. Run as the desktop user.
+set -euo pipefail
+D=/opt/omarchy-tablet/ui
+: "${XDG_RUNTIME_DIR:?Run this from the desktop session}"
+export GDK_BACKEND=wayland
+export LANG=C.UTF-8
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  for socket in "$XDG_RUNTIME_DIR"/hypr/*/.socket.sock; do
+    [[ -S $socket ]] || continue
+    export HYPRLAND_INSTANCE_SIGNATURE=${socket%/.socket.sock}
+    HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE##*/}
+    break
+  done
+fi
+
+# Kid Mode (tablet.touch shell plugin) creates this flag; it persists across
+# reboots. While it exists the keyboard uses kid pages (no Super/Ctrl/Alt, no
+# Desktop page) and launch/window actions are refused.
+KID_FLAG=$HOME/.local/state/tablet-touch/kid-mode
+kid_mode() { [[ -e $KID_FLAG ]]; }
+default_pages() {
+  if kid_mode; then echo kidabc,kid123; else echo tablet,tabletsymbols,tabletnav,tabletomarchy; fi
+}
+
+# --auto: wvkbd owns the Wayland input-method slot (fcitx5 runs without its
+# waylandim frontend), so focusing a text field shows the keys and leaving it
+# hides them. Pass --hidden to start out of the way (session start).
+keyboard_start() {
+  local pages=${1:-$(default_pages)}
+  shift || true
+  if ! pgrep -u "$(id -u)" -x wvkbd-mobintl >/dev/null; then
+    wvkbd-mobintl -H 360 -L 260 --no-popup --auto "$@" --fn 'DejaVu Sans 20' -l "$pages" --landscape-layers "$pages" \
+      --bg 16181d --fg 292d36 --fg-sp 343b48 --press 6a8caf --press-sp 6a8caf \
+      > "$XDG_RUNTIME_DIR/wvkbd.log" 2>&1 &
+  fi
+}
+
+case ${1:-start} in
+  apps|menu|terminal|browser|files|close|desktop)
+    # Refused in Kid Mode; only the shell's own allow-listed launcher runs apps.
+    if kid_mode; then exit 0; fi ;;
+esac
+
+case ${1:-start} in
+  keyboard-start) keyboard_start "$(default_pages)" --hidden ;;
+  keyboard-restart)
+    # Swap page sets (Kid Mode on/off): stop the keyboard, start it hidden.
+    pkill -TERM -u "$(id -u)" -x wvkbd-mobintl || true
+    for _ in $(seq 50); do pgrep -u "$(id -u)" -x wvkbd-mobintl >/dev/null || break; sleep 0.1; done
+    keyboard_start "$(default_pages)" --hidden
+    ;;
+  keyboard-show)
+    if pgrep -u "$(id -u)" -x wvkbd-mobintl >/dev/null; then
+      # Named "tablet" page would leave the kid pages; plain show keeps them.
+      if kid_mode; then pkill -USR2 -u "$(id -u)" -x wvkbd-mobintl
+      else pkill -RTMIN+2 -u "$(id -u)" -x wvkbd-mobintl; fi
+    else
+      keyboard_start
+    fi
+    ;;
+  keyboard-hide) pkill -USR1 -u "$(id -u)" -x wvkbd-mobintl || true ;;
+  desktop)
+    if pgrep -u "$(id -u)" -x wvkbd-mobintl >/dev/null; then
+      pkill -RTMIN+1 -u "$(id -u)" -x wvkbd-mobintl
+    else
+      keyboard_start tabletomarchy,tablet,tabletsymbols,tabletnav
+    fi
+    ;;
+  start)
+    if ! pgrep -u "$(id -u)" -x waybar >/dev/null; then
+      waybar --config "$D/waybar.json" --style "$D/waybar.css" \
+        > "$XDG_RUNTIME_DIR/waybar.log" 2>&1 &
+    fi
+    keyboard_start
+    ;;
+  keyboard)
+    if pgrep -u "$(id -u)" -x wvkbd-mobintl >/dev/null; then
+      pkill -RTMIN -u "$(id -u)" -x wvkbd-mobintl
+    else
+      keyboard_start
+    fi
+    ;;
+  apps) exec omarchy menu toggle apps ;;
+  menu) exec omarchy menu toggle ;;
+  terminal) exec omarchy launch terminal ;;
+  browser) exec omarchy launch browser ;;
+  files) exec omarchy launch nautilus ;;
+  rotate) exec /opt/omarchy-tablet/tablet-orientation toggle ;;
+  auto) exec /opt/omarchy-tablet/tablet-orientation auto ;;
+  close) exec hyprctl -q dispatch 'hl.dsp.close()' ;;
+  *) echo 'Usage: tablet-ui start|keyboard-start|keyboard-restart|keyboard-show|keyboard-hide|keyboard|desktop|apps|menu|terminal|browser|files|rotate|auto|close' >&2; exit 2 ;;
+esac

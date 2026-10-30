@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Run a shell command on the tablet's initramfs telnet rescue shell and print its output.
+
+Usage: tools/tsh 'command; command'   (exit status of the remote command is returned)
+Env:   TSH_HOST (172.16.42.1), TSH_PORT (23), TSH_TIMEOUT seconds (60)
+"""
+import os
+import re
+import socket
+import sys
+import time
+import uuid
+
+IAC, DONT, DO, WONT, WILL = 255, 254, 253, 252, 251
+
+
+def strip_negotiation(sock, data):
+    """Refuse every telnet option and return the remaining payload bytes."""
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        b = data[i]
+        if b == IAC and i + 2 < len(data) and data[i + 1] in (DO, DONT, WILL, WONT):
+            verb, opt = data[i + 1], data[i + 2]
+            reply = WONT if verb in (DO, DONT) else DONT
+            sock.sendall(bytes([IAC, reply, opt]))
+            i += 3
+        elif b == IAC and i + 1 < len(data):
+            i += 2
+        else:
+            out.append(b)
+            i += 1
+    return bytes(out)
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    cmd = " ".join(sys.argv[1:])
+    host = os.environ.get("TSH_HOST", "172.16.42.1")
+    port = int(os.environ.get("TSH_PORT", "23"))
+    timeout = float(os.environ.get("TSH_TIMEOUT", "60"))
+    tag = uuid.uuid4().hex[:12]
+    begin, end = f"__B{tag}__", f"__E{tag}__"
+
+    sock = socket.create_connection((host, port), timeout=10)
+    sock.settimeout(1.0)
+    time.sleep(0.5)
+    try:
+        strip_negotiation(sock, sock.recv(65536))
+    except socket.timeout:
+        pass
+    # stty -echo keeps the command itself out of the captured output
+    wrapped = f"stty -echo 2>/dev/null; echo {begin}; {{ {cmd}\n}} 2>&1; echo {end}$?\n"
+    sock.sendall(wrapped.encode())
+
+    buf = b""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            chunk = sock.recv(65536)
+        except socket.timeout:
+            continue
+        if not chunk:
+            break
+        buf += strip_negotiation(sock, chunk)
+        if re.search(rf"{end}\d+".encode(), buf):
+            break
+    sock.close()
+
+    text = buf.decode(errors="replace").replace("\r", "")
+    m = re.search(rf"{begin}\n(.*){end}(\d+)", text, re.S)
+    if not m:
+        sys.stdout.write(text)
+        sys.exit("tsh: no end marker (timeout or connection closed)")
+    sys.stdout.write(m.group(1))
+    sys.exit(int(m.group(2)))
+
+
+if __name__ == "__main__":
+    main()

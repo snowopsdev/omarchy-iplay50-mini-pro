@@ -1,0 +1,17 @@
+# Add to ~/.ssh/config (or: Include <repo>/tools/ssh-config.snippet). Then: ssh omarchy-tablet
+# (Adapted from the project's poc/ssh-config.snippet: key and known_hosts locations.)
+Host omarchy-tablet
+    HostName 172.16.42.1
+    User root
+    IdentityFile ~/.ssh/omarchy-tablet_ed25519
+    IdentitiesOnly yes
+    UserKnownHostsFile ~/.ssh/omarchy-tablet_known_hosts
+    HostKeyAlias 172.16.42.1
+    StrictHostKeyChecking yes
+    ConnectTimeout 5
+    ServerAliveInterval 5
+    ServerAliveCountMax 3
+
+# Rescue shell inside the initramfs (before switch_root, or when it stays there): plain telnet, root, no password:
+#   telnet 172.16.42.1        (fallback if telnetd is unavailable: nc 172.16.42.1 2323)
+#   or non-interactively:     tools/tsh 'command'

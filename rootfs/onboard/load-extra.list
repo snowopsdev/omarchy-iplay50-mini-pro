@@ -1,0 +1,9 @@
+nvmem-mt635x-efuse.ko
+mtk_gpufreq_mt6789.ko
+mali_mgm_mt6789.ko
+mali_prot_alloc_mt6789.ko
+mtk-btcvsd.ko
+mtk-scp-vow.ko
+mtk-vow.ko
+mtk-dvfsrc-start.ko
+fhctl.ko

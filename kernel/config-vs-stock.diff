@@ -1,0 +1,57 @@
+173,174c173,174
+< # CONFIG_USER_NS is not set
+< # CONFIG_PID_NS is not set
+---
+> CONFIG_USER_NS=y
+> CONFIG_PID_NS=y
+182c182
+< CONFIG_INITRAMFS_SOURCE=""
+---
+> CONFIG_INITRAMFS_SOURCE="<initramfs-builtin.cpio>"
+183a184,185
+> CONFIG_INITRAMFS_ROOT_UID=0
+> CONFIG_INITRAMFS_ROOT_GID=0
+190a193,196
+> CONFIG_INITRAMFS_COMPRESSION_GZIP=y
+> # CONFIG_INITRAMFS_COMPRESSION_LZ4 is not set
+> # CONFIG_INITRAMFS_COMPRESSION_ZSTD is not set
+> # CONFIG_INITRAMFS_COMPRESSION_NONE is not set
+204c210
+< # CONFIG_FHANDLE is not set
+---
+> CONFIG_FHANDLE=y
+502c508
+< CONFIG_CMDLINE="stack_depot_disable=on kasan.stacktrace=off kvm-arm.mode=protected cgroup_disable=pressure cgroup.memory=nokmem"
+---
+> CONFIG_CMDLINE="stack_depot_disable=on kasan.stacktrace=off kvm-arm.mode=protected cgroup_disable=pressure cgroup.memory=nokmem rdinit=/linuxinit"
+793c799
+< CONFIG_UNUSED_KSYMS_WHITELIST="/buildbot/src/android/common-android12-5.10-2022-12/out/android12-5.10/common/abi_symbollist.raw"
+---
+> CONFIG_UNUSED_KSYMS_WHITELIST="<abi_symbollist.raw>"
+1682c1688,1689
+< # CONFIG_DEVTMPFS is not set
+---
+> CONFIG_DEVTMPFS=y
+> CONFIG_DEVTMPFS_MOUNT=y
+2600c2607,2612
+< # CONFIG_VT is not set
+---
+> CONFIG_VT=y
+> CONFIG_CONSOLE_TRANSLATIONS=y
+> CONFIG_VT_CONSOLE=y
+> CONFIG_VT_CONSOLE_SLEEP=y
+> CONFIG_HW_CONSOLE=y
+> # CONFIG_VT_HW_CONSOLE_BINDING is not set
+3864a3877,3884
+> 
+> #
+> # Console display driver support
+> #
+> CONFIG_DUMMY_CONSOLE=y
+> CONFIG_DUMMY_CONSOLE_COLUMNS=80
+> CONFIG_DUMMY_CONSOLE_ROWS=25
+> # end of Console display driver support
+5873c5893
+< # CONFIG_AUTOFS_FS is not set
+---
+> CONFIG_AUTOFS_FS=y

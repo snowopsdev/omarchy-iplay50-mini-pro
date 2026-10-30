@@ -1,0 +1,12 @@
+#!/bin/bash
+# tools/tablet [command...]: ssh to the tablet as root over the USB-gadget link (or another address).
+#   TABLET_ADDRESS      default 172.16.42.1 (USB NCM link; use the Wi-Fi address once Wi-Fi works)
+#   TABLET_SSH_KEY      default ~/.ssh/omarchy-tablet_ed25519 (your own key, see tools/README.md)
+#   TABLET_KNOWN_HOSTS  default ~/.ssh/omarchy-tablet_known_hosts (holds the line rootfs/build-rootfs.sh generated)
+# HostKeyAlias pins the host key to 172.16.42.1 whichever address is used.
+# (Adapted from the project's omarchy-port/tablet: key and known_hosts locations.)
+set -euo pipefail
+exec ssh -o ConnectTimeout=5 -o BatchMode=yes \
+  -o HostKeyAlias=172.16.42.1 \
+  -i "${TABLET_SSH_KEY:-$HOME/.ssh/omarchy-tablet_ed25519}" \
+  -o UserKnownHostsFile="${TABLET_KNOWN_HOSTS:-$HOME/.ssh/omarchy-tablet_known_hosts}" root@"${TABLET_ADDRESS:-172.16.42.1}" "$@"

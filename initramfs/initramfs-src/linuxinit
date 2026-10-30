@@ -1,0 +1,154 @@
+#!/omarchy/bin/busybox sh
+# STAGE0 = /linuxinit (rdinit), embedded in the kernel cpio. Tiny + paranoid. Everything we own lives in /omarchy
+# (Android's vendor_boot/init_boot ramdisks are unpacked on top and own /bin /etc /init /system /lib).
+#   1. proc/sys/devtmpfs, "<2>omarchy-stage0: alive" to /dev/kmsg, unconditional 60 s timer -> reboot to bootloader
+#   2. insmod /lib/modules per modules.load (every module logged BEFORE insmod)
+#   3. find PARTNAME=init_boot_b; if it starts with 070701 (newc cpio, uncompressed) unpack it to /stage1 and
+#      exec /stage1/init; else fall back to the built-in full init /omarchy/libexec/init-main
+#   4. never exit as PID 1
+# Stage1 disarms the timer: touch /run/omarchy/keep-alive (and kills /run/omarchy/stage0-timer.pid).
+
+O=/omarchy
+export PATH=$O/bin:$O/sbin
+MODDIR=/lib/modules
+TIMER_SECS=${TIMER_SECS:-60}
+S1_WAIT=${S1_WAIT:-30}                       # seconds to wait for the init_boot_b partition node
+S1_PART=init_boot_b
+
+# ---- 1. strictly necessary mounts, then the first sign of life
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+if [ ! -w /dev/kmsg ]; then
+	mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs tmpfs /dev 2>/dev/null
+	[ -c /dev/kmsg ] || mknod -m 600 /dev/kmsg c 1 11 2>/dev/null
+fi
+k() { [ -w /dev/kmsg ] && echo "<2>omarchy-stage0: $*" >> /dev/kmsg 2>/dev/null; }
+k "alive (pid $$, $0, $(uname -r))"
+# stdio: never use /dev/console (may block); stderr of everything below lands in kmsg
+if [ -w /dev/kmsg ]; then exec < /dev/null >> /dev/kmsg 2>&1; fi
+echo "8 4 1 7" > /proc/sys/kernel/printk 2>/dev/null        # console_loglevel 8: everything reaches the console/pstore
+echo on > /proc/sys/kernel/printk_devkmsg 2>/dev/null        # no ratelimit on our kmsg writes
+trap 'k "FATAL: stage0 script exiting - parking PID 1 (timer still armed)"; while :; do sleep 3600; done' EXIT
+mkdir -p /run /tmp /stage1 /newroot
+mount -t tmpfs -o mode=0755 tmpfs /run 2>/dev/null
+mkdir -p /run/omarchy /run/mods
+k "mounted: $(grep -c . /proc/mounts) mounts; /lib/modules=$(ls /lib/modules 2>/dev/null | wc -l) files; modules.load=$(wc -l < /lib/modules/modules.load 2>/dev/null) lines"
+
+# unconditional timer: if stage1 has not taken over (touch keep-alive) within TIMER_SECS, reboot into the bootloader
+(
+	i=0
+	while [ $i -lt $TIMER_SECS ]; do
+		sleep 1; i=$((i + 1))
+		[ -e /run/omarchy/keep-alive ] && { k "timer: keep-alive after ${i}s - disarmed"; exit 0; }
+	done
+	k "TIMER EXPIRED after ${TIMER_SECS}s: last progress: $(cat /run/omarchy/progress 2>/dev/null)"
+	k "udc='$(ls /sys/class/udc 2>&1 | tr '\n' ' ')' blocks='$(ls /sys/class/block 2>&1 | tr '\n' ' ' | cut -c1-300)'"
+	sync
+	k "sync done, calling reboot-bootloader"
+	$O/bin/reboot-bootloader
+	k "reboot-bootloader returned rc=$? - trying reboot -f"
+	reboot -f
+	while :; do sleep 3600; done
+) &
+echo $! > /run/omarchy/stage0-timer.pid
+k "timer armed: ${TIMER_SECS}s (pid $!)"
+progress() { echo "$*" > /run/omarchy/progress; }
+
+# ---- 2. modules, strictly in modules.load order; deps (modules.dep) first; every insmod logged BEFORE it runs
+progress "modules: starting"
+: > /run/mod.deps; : > /run/mod.paths
+[ -f $MODDIR/modules.dep ] && awk -v D="$MODDIR" '
+	function bn(p,  n, a) { n = split(p, a, "/"); return a[n] }
+	function full(p) { if (substr(p, 1, 1) == "/") return p; return D "/" p }
+	{ k = $1; sub(/:$/, "", k); b = bn(k); print b, full(k) >> "/run/mod.paths"
+	  line = b ":"; for (i = 2; i <= NF; i++) line = line " " bn($i); print line >> "/run/mod.deps" }' $MODDIR/modules.dep
+NMOD_OK=0; NMOD_FAIL=0
+load_mod() {
+	local b=$1 d p out rc
+	[ -e /run/mods/$b ] && return 0
+	: > /run/mods/$b
+	for d in $(sed -n "s/^$b: *//p" /run/mod.deps | head -n1); do load_mod $d; done
+	p=$(sed -n "s/^$b //p" /run/mod.paths | head -n1)
+	[ -f "$p" ] || p=$MODDIR/$b
+	[ -f "$p" ] || { k "insmod $b: FILE NOT FOUND"; return 1; }
+	progress "modules: insmod $b"
+	k "insmod $b"
+	out=$(insmod "$p" 2>&1); rc=$?
+	case "$out" in *"File exists"*) rc=0 ;; esac
+	if [ $rc -ne 0 ]; then k "insmod $b FAILED rc=$rc: $out"; rm -f /run/mods/$b; return 1; fi
+	k "insmod $b ok"
+	return 0
+}
+if [ -f $MODDIR/modules.load ]; then
+	while read m; do
+		[ -n "$m" ] || continue
+		case "$m" in \#*) continue ;; esac
+		m=${m##*/}; case "$m" in *.ko) ;; *) m=$m.ko ;; esac
+		if load_mod "$m"; then NMOD_OK=$((NMOD_OK + 1)); else NMOD_FAIL=$((NMOD_FAIL + 1)); fi
+	done < $MODDIR/modules.load
+else
+	k "NO $MODDIR/modules.load"
+fi
+echo 1 > /sys/module/musb_hdrc/parameters/kernel_init_done 2>/dev/null
+: > /run/omarchy/modules-done
+progress "modules done"
+k "modules done: ok=$NMOD_OK fail=$NMOD_FAIL lsmod=$(lsmod 2>/dev/null | wc -l) udc='$(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')'"
+
+# ---- 3. stage1 from init_boot_b (raw newc cpio, uncompressed), or the built-in fallback
+find_part() {              # prints /dev node for PARTNAME=$1
+	local u n maj min
+	for u in ${SYSBLOCK:-/sys/class/block}/*/uevent; do
+		grep -qx "PARTNAME=$1" $u 2>/dev/null || continue
+		n=$(sed -n 's/^DEVNAME=//p' $u); [ -n "$n" ] || n=$(basename $(dirname $u))
+		maj=$(sed -n 's/^MAJOR=//p' $u); min=$(sed -n 's/^MINOR=//p' $u)
+		[ -e /dev/$n ] || mknod -m 600 /dev/$n b $maj $min 2>/dev/null
+		[ -e /dev/$n ] && { echo /dev/$n; return 0; }
+	done
+	return 1
+}
+fallback() {
+	k "FALLBACK to built-in init-main: $1"
+	progress "fallback: $1"
+	exec $O/bin/busybox sh $O/libexec/init-main
+	k "exec init-main failed?!"
+}
+progress "stage1: looking for $S1_PART"
+i=0; DEV=
+while [ $i -lt $S1_WAIT ]; do
+	DEV=$(find_part $S1_PART) && break
+	DEV=; i=$((i + 1)); sleep 1
+done
+k "partition $S1_PART -> '${DEV:-NOT FOUND}' after ${i}s; blocks: $(ls /sys/class/block 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+if [ -n "$DEV" ]; then
+	SKIP=0
+	M0=$(head -c 6 $DEV 2>/dev/null)
+	if [ "$M0" != 070701 ] && [ "$(head -c 8 $DEV 2>/dev/null)" = 'ANDROID!' ] && [ "$(dd if=$DEV bs=4096 skip=1 count=1 2>/dev/null | head -c 6)" = 070701 ]; then
+		SKIP=1; M0=070701; k "$DEV has an Android boot header; cpio at +4096"
+	fi
+	k "$DEV magic='$M0' skip=$SKIP"
+	if [ "$M0" = 070701 ]; then
+		progress "stage1: unpacking"
+		( cd /stage1 && dd if=$DEV bs=4096 skip=$SKIP 2>/dev/null | cpio -idmu 2>&1 )
+		k "cpio rc=$?; /stage1: $(ls /stage1 | tr '\n' ' ') init=$(ls -l /stage1/init 2>&1 | cut -c1-60)"
+		if [ -f /stage1/init ]; then
+			if $O/bin/busybox sh -n /stage1/init 2>/dev/null; then
+				k "exec stage1 /stage1/init"
+				progress "exec stage1"
+				exec $O/bin/busybox sh /stage1/init
+				k "exec stage1 failed?!"
+			else
+				fallback "stage1 init has a syntax error"
+			fi
+		else
+			fallback "no /stage1/init after unpack"
+		fi
+	else
+		fallback "no cpio magic in $DEV"
+	fi
+else
+	fallback "$S1_PART not found"
+fi
+
+# ---- 4. never exit
+k "stage0: nothing left to do - parking (timer handles recovery)"
+while :; do sleep 3600; done
