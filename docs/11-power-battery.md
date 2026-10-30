@@ -27,7 +27,7 @@ Files in this repo:
 | Full / design capacity reported to UPower | Wrong | `charge_full` 2946000 µAh vs `charge_full_design` 294000 µAh (10× too small) |
 | 500 mA ceiling on a USB SDP host port | Works | Stopped VBUS/USB cycling; survived reboot (2026-10-28) |
 | Wall (DCP) / USB-PD chargers with the ceiling helper | Unverified | Helper restores the original policy for CDP/DCP/PD by design; never tested physically |
-| Battery capacity calibration | **In progress** | Logger installed 2026-10-29; a full discharge ran on 2026-10-30; results pending, no capacity figure is claimed here |
+| Battery capacity calibration | **Measured, not corrected** | Full discharge + recharge logged 2026-10-30: the gauge's current reads ~1.4–1.8× high, so its percentage falls too fast (1 % with 2.2 h left). Runtime ~11.5 h screen on. See step 4 |
 | Suspend / resume (s2idle) | Untested | Only `freeze mem`/`[s2idle]` exposed; lock path issue below |
 | Charger-only (power-off) boot | Untested | Needs physical access |
 | Thermals | Read normally | CPU/SoC/GPU ~35-38 °C, battery 29-30 °C; charger `-127` °C is an "unavailable" sentinel |
@@ -175,8 +175,35 @@ figure. Validated only with synthetic data (1000 mAh over 30 % → 3333 mAh).
 Method (planned 2026-10-29): wall charger to 100 % → unplugged normal use on Wi-Fi down to
 ~15 % (no forced deep discharge) → full recharge. Compare the implied capacity with the
 gauge's 2946 mAh and the ~4000 mAh retail rating before deciding on any metadata
-correction. **Status 2026-10-30:** a full discharge has just been run; the analysis is
-pending and nothing about real capacity is concluded yet.
+correction.
+
+**Result, 2026-10-30.** Unplugged from 95 % (4.29 V) at 21:02, screen on all night at
+backlight 102, Wi-Fi on, light use; the tablet shut off at 08:31 at 3.13 V: **11.5 h of
+runtime**. The report said 5513 mAh drawn ("implied 5865 mAh"), but that number is not
+real, because the gauge's current reading is too high:
+
+- During the next wall charge (DCP, input limit 2.05 A, VBUS ~4.8–5 V, no high-voltage
+  charging: at most ~10 W in) the gauge reported a flat 3.14 A into the battery,
+  12.6–13.5 W, while the screen was also on. That is physically impossible, so the gauge
+  overstates current by at least ~1.4× (≥ 13.5 W / ~9.8 W), and by ~1.6–1.8× once charger
+  efficiency (~0.9) and ~1–2 W of system load are allowed for.
+- Corrected, the usable capacity is roughly **3300–4000 mAh**, consistent with the ~4000 mAh
+  retail rating; the gauge's own 2946 mAh header default is too small. An external USB-C
+  power meter would pin the factor down; none was used.
+
+What users see: the percentage drops roughly twice as fast as the charge in the second half.
+
+| Gauge % | Runtime left |
+|---|---|
+| 50 % | 8.4 h |
+| 25 % | 6.2 h |
+| 10 % | 4.3 h |
+| 1 % | 2.2 h (it then stays at 1 % until shutdown, at ~3.13 V) |
+
+The error is on the safe side (no surprise shutdowns), so nothing was changed. Correcting it
+means giving the kernel gauge the right Q_MAX and current-sense tuning (normally supplied by
+Android's NVRAM daemon, absent here; see step 1 and "Findings and pitfalls"), which risks a gauge that
+reports empty early or late. Not attempted.
 
 A desktop USB port is not enough for a full charge: at install time, on the 500 mA port,
 the charger said `Full` with zero charge current while the battery supplied

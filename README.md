@@ -42,7 +42,7 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
 | GPU: Hyprland compositing on Mali-G57 (Zink + PanVK on the vendor kbase) | Works; apps and browser stay on CPU rendering (llvmpipe) | [08](docs/08-gpu.md) |
 | Hardware H264 decoding in Chromium (vendor VCU + V4L2 bridge) | Works up to 1080p30, survives reboot; other codecs not validated; some frame drops | [09](docs/09-video-decoding.md) |
 | On-screen keyboard (tap a field → keys), touch shell, Kid Mode | Works; some items unverified | [10](docs/10-touch-ui.md) |
-| Charging, battery % | Works, but the percentage is an estimate (gauge in fallback mode); calibration in progress | [11](docs/11-power-battery.md) |
+| Charging, battery % | Works; the percentage runs ~2× fast in the second half (1 % with 2.2 h left); ~11.5 h screen-on runtime | [11](docs/11-power-battery.md) |
 | Suspend | **Untested** | [11](docs/11-power-battery.md) |
 | Responsiveness work and measurement tools | Done, measured | [12](docs/12-performance.md) |
 | Account password, lock screen | **Not done**: no password set, idle lock disabled | [04](docs/04-omarchy.md) |
