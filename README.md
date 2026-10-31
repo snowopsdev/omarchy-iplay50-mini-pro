@@ -2,8 +2,9 @@
 
 Native Arch Linux ARM + [Omarchy](https://github.com/basecamp/omarchy) (Hyprland) as the only
 operating system on an Alldocube iPlay 50 mini Pro tablet, with Wi-Fi, speaker audio, touch,
-auto-rotation, an on-screen keyboard with key-press vibration, the microphone, GPS (through gpsd), a GPU-composited desktop, hardware H264 video in
-Chromium, and a touch-first "Home & Dock" shell. Work done 2026-10-27 to 2026-10-30.
+auto-rotation, an on-screen keyboard with key-press vibration, the microphone, GPS (through gpsd), a GPU-rendered desktop (compositor, shell, GTK 4/Qt apps and
+Chromium), hardware H264 video in Chromium, and a touch-first "Home & Dock" shell.
+Work done 2026-10-27 to 2026-10-31.
 
 ![Home & Dock shell](shell-plugin/screenshots/home-dock.png)
 
@@ -23,7 +24,7 @@ The "Under this port" column was read from the project's unit while it ran Linux
 | Model | iPlay 50 mini Pro (T811M, box CUL8JN) | Vendor build props: `ALLDOCUBE` / `Zhangwanmini`; lk product `tb8781p1_64` |
 | SoC | MediaTek Helio G99 (MT8781, the tablet version of MT6789), 6 nm | Same |
 | CPU | 2× Cortex-A76 + 6× Cortex-A55 | A76 cores (6–7) up to 2.2 GHz; A55 cores (0–5) up to 2.0 GHz |
-| GPU | Arm Mali-G57 MC2 | `Mali-G57 2 cores r0p1`. Compositing via Zink + PanVK; apps render on the CPU ([08](docs/08-gpu.md)) |
+| GPU | Arm Mali-G57 MC2 | `Mali-G57 2 cores r0p1`. Zink + PanVK on the vendor kbase driver: compositor, shell, GTK 4/Qt apps and Chromium ([08](docs/08-gpu.md)) |
 | RAM | 8 GB (plus 8 GB "virtual RAM", Android swap) | 7.2 GiB usable |
 | Storage | 256 GB, microSD up to 512 GB | UFS 3.1, 256 GB; ~228 GiB `userdata` is the Linux root. microSD **not tested** |
 | Display | 8.4" in-cell IPS, 1200×1920 | Panel is natively portrait (1200×1920 on DSI-1); rotation via the accelerometer ([06](docs/06-sensors.md)) |
@@ -68,7 +69,8 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
 | Bluetooth | Radio powers on; `hci0`/pairing/audio **unverified** | [05](docs/05-wifi-bluetooth.md) |
 | Auto-rotation + touch alignment | Works (accelerometer; no gyroscope) | [06](docs/06-sensors.md) |
 | Speaker and built-in microphone (PipeWire) | Works (mic measured with a test tone, not yet by voice); headset and BT audio unvalidated | [07](docs/07-audio.md) |
-| GPU: Hyprland compositing on Mali-G57 (Zink + PanVK on the vendor kbase) | Works; apps and browser stay on CPU rendering (llvmpipe) | [08](docs/08-gpu.md) |
+| GPU: Hyprland compositing on Mali-G57 (Zink + PanVK on the vendor kbase) | Works | [08](docs/08-gpu.md) |
+| GPU rendering for the shell, GTK 4/Qt apps, mpv and Chromium | Works since 2026-10-31 (one PanVK patch, no kernel change). WebGL Aquarium 7 → 42 fps; 1080p video drops 10-17 % → 3-6 %; shell CPU for opening Home 28x lower. Electron, GTK 3 and Foot still draw on the CPU; mpv must use OpenGL; long-term stability and battery impact unmeasured | [08](docs/08-gpu.md) |
 | Hardware H264 decoding in Chromium (vendor VCU + V4L2 bridge) | Works up to 1080p30, survives reboot; other codecs not validated; some frame drops | [09](docs/09-video-decoding.md) |
 | On-screen keyboard (tap a field → keys), key-press vibration, touch shell, Kid Mode | Works; some items unverified | [10](docs/10-touch-ui.md) |
 | GPS (vendor `mnld` in a Bionic chroot → `gpsd`) | Engine runs and streams NMEA to gpsd; **position fix not yet verified** (tested indoors only) | [13](docs/13-gps.md) |
@@ -87,14 +89,10 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
   `camerahalserver` with over 1,000 vendor libraries, behind Android binder
   services (hwservicemanager, gralloc, the HIDL camera provider). That needs a
   Halium/Droidian-style Android container plus a binder client. Not attempted.
-- **GPU rendering for apps and the browser.** Apps stay on CPU rendering
-  ([08](docs/08-gpu.md)). The first blocker for Chromium on Zink/PanVK is a
-  missing native fence file descriptor: PanVK legally reports "already
-  signalled" as -1, Chromium requires an fd, and this kernel has no
-  `CONFIG_SW_SYNC` to make one. A candidate route is a tiny kernel module that
-  hands out already-signalled sync files (`dma_fence_get_stub()` +
-  `sync_file_create()`), used by PanVK in that case. Not attempted; other
-  Chromium paths failed for different reasons recorded in doc 08.
+- **GPU rendering for Electron apps** (Obsidian etc.): they run fine under the
+  GPU profile but their GPU process lands on llvmpipe, likely because it uses
+  the same EGL settings as Wayland windows; giving it Chromium's setting
+  (`GALLIUM_DRIVER=zink`) is the obvious next try. Not attempted.
 
 The status tables at the top of each doc are the authoritative, item-by-item list, including
 what was only checked by injected input rather than by hand.
@@ -112,7 +110,7 @@ rollback:
 5. [Wi-Fi, Bluetooth, USB debug link](docs/05-wifi-bluetooth.md)
 6. [Sensors and rotation](docs/06-sensors.md)
 7. [Audio](docs/07-audio.md)
-8. [GPU compositing](docs/08-gpu.md)
+8. [GPU compositing and app/browser rendering](docs/08-gpu.md)
 9. [Hardware video decoding](docs/09-video-decoding.md)
 10. [Touch UI: keyboard, Home & Dock shell, Kid Mode](docs/10-touch-ui.md)
 11. [Power and battery](docs/11-power-battery.md)

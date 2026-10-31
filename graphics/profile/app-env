@@ -1,8 +1,16 @@
 #!/bin/sh
-# Keep application/sandbox rendering on the validated software profile.
+# Graphics profile for applications and the shell (wraps every session
+# autostart command, and through the environment import every app launched
+# later). With /opt/omarchy-tablet/gpu/apps-gpu present, apps render on the
+# Mali GPU (gpu-app-env); otherwise, or with TABLET_APPS_GPU=0, on the
+# software profile (llvmpipe). Takes effect at the next login.
+if [ "${TABLET_APPS_GPU:-}" != 0 ] && [ -e /opt/omarchy-tablet/gpu/apps-gpu ]; then
+  exec /opt/omarchy-tablet/gpu/gpu-app-env "$@"
+fi
 unset VK_DRIVER_FILES VK_ICD_FILENAMES PAN_I_WANT_A_BROKEN_VULKAN_DRIVER
 unset PANVK_KBASE_USER_CACHE_SYNC AQ_TABLET_ZINK_PRIMARY
 unset MESA_GLES_VERSION_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_EXTENSION_OVERRIDE
+unset MESA_LOADER_DRIVER_OVERRIDE PANVK_KBASE_DRI3
 export GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 GBM_ALWAYS_SOFTWARE=1
 export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/aq-software-primary.so
 export UWSM_APP_UNIT_TYPE=service

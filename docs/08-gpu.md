@@ -2,10 +2,15 @@
 
 The desktop compositor (Hyprland) renders on the GPU through Mesa's Zink
 (OpenGL ES on Vulkan) and a privately built PanVK Vulkan driver that talks to
-the tablet's own vendor `mali_kbase` kernel driver. Every application,
-including the Omarchy shell, terminals and Chromium, stays on the software
-renderer (llvmpipe). Source files: [`graphics/`](../graphics/README.md).
-Work dates: 2026-10-28 (bring-up) and 2026-10-29 (follow-ups).
+the tablet's own vendor `mali_kbase` kernel driver. Since 2026-10-31 the
+Omarchy shell, GTK 4 and Qt applications, mpv and Chromium (page rendering,
+compositing, WebGL and the hardware-decoded video) render on the GPU too,
+through a second PanVK build with one patch; see
+[Applications and Chromium on the GPU](#applications-and-chromium-on-the-gpu-2026-10-31).
+Terminals (Foot), GTK 3 and Electron apps still draw on the CPU.
+Source files: [`graphics/`](../graphics/README.md).
+Work dates: 2026-10-28 (bring-up), 2026-10-29 (follow-ups), 2026-10-31
+(applications and browser).
 
 ## Status
 
@@ -14,8 +19,17 @@ Work dates: 2026-10-28 (bring-up) and 2026-10-29 (follow-ups).
 | Hyprland compositing on Mali-G57 MC2 via Zink + PanVK/kbase | **Works** | User physically confirmed Apps, Term, Close and typing are responsive and flicker-free. Passed a one-shot GPU boot and a second normal boot with the persistent profile. No GPU faults logged. |
 | Vulkan compute (1024 elements, checked against CPU) | Works | `gpu-smoke`, as the unprivileged desktop user |
 | GLES shader draw + readback, transform feedback, GBM linear dma-buf export, mediatek-drm PRIME import, EGL dma-buf import | Works | `egl-smoke` / `egl-smoke gbm`; GLES 3.1 reported, no version overrides |
-| Applications (shell, Foot, Chromium, …) on GPU | **Not used** (by design) | Kept on llvmpipe; see "Why apps stay on llvmpipe" |
-| Chromium GPU rendering (ANGLE GLES-EGL, ANGLE Vulkan, X11 GLES) | **Not working** | Fence export failure / scanout allocation failure / no DRI3; all rejected |
+| Native fence export (`eglDupNativeFenceFDANDROID`) | **Works** (2026-10-31) | `egl-fence-test`: 0 failures in 1000 (500 with the GPU work already finished). Unpatched driver: 200/200 and 10/200 failed |
+| Chromium on the GPU (ANGLE GLES-EGL over Zink/PanVK) | **Works**, default since 2026-10-31 | `chrome://gpu`: GPU compositing, GPU rasterisation, WebGL, WebGPU enabled; renderer `ANGLE (Mesa, zink Vulkan 1.3(Mali-G57 MC2 (MESA_PANVK)))`. YouTube, Wikipedia, The Verge and WebGL Aquarium loaded with no GPU-process restart |
+| Chromium WebGL Aquarium (500 fish, 1024x1024 canvas) | 41-44 fps | Software profile: 7.4 fps |
+| Chromium hardware video + GPU rendering, local 1080p30 clip | 3-6 % frames dropped | Same clip on the software profile: 10-17 %. 4-minute soak (9 x 25 s, windowed and fullscreen alternating): 3.8-6.2 %, no GPU fault, no reset |
+| YouTube, 60 fps video, 20 s | GPU: 720p, 1201 frames, 485 dropped (~36 fps shown) | Software: YouTube chose 480p and showed 58 frames in 19 s. YouTube picks a different resolution per browser, so this is not a controlled comparison |
+| Chromium page scroll (Wikipedia, 5 s) | 30.6 fps, 95th-percentile frame 51 ms | Software: 28.2 fps, 68 ms. Little gain: scrolling is not bound by rasterisation here |
+| Omarchy shell (Quickshell / Qt Quick) on the GPU | **Works**, default since 2026-10-31 | Home screen opened and closed 6 times: 0.17 s of shell CPU time (software: 4.74 s); resident memory 509 MB (software: 674 MB) |
+| GTK 4 apps (GL and Vulkan renderers), Qt Quick, mpv (OpenGL), vkcube | **Work** | Correct pixels on screen (screenshots), Mali driver mapped. Checked: Nautilus, mpv, a Qt Quick test window. LibreOffice and Obsidian also open normally under the GPU profile |
+| mpv with Vulkan output (`gpu-api=vulkan`, libplacebo) | **Crashes** | Segfault, also with the compositor's unpatched driver and without dma-buf presentation; `~/.config/mpv/mpv.conf` sets `gpu-api=opengl` |
+| Electron apps (Obsidian checked), GTK 3 apps, Foot | CPU | They work under the GPU profile but draw in software: Electron's GPU process ends up on llvmpipe, GTK 3 and Foot draw with Cairo/pixman |
+| Simple GL window frame rate (glClear + swap, 1280x458) | 28 fps | Through shared dma-heap buffers; 20 fps through the CPU-copy (wl_shm) swapchain. Not investigated further |
 | Hardware cursor plane | **Not usable** | The vendor cursor ioctl resets the tablet; a shim refuses it, cursors are software |
 | Arm libmali (MediaTek Genio r32p0 builds) | **Not working** | Both builds reject this GPU (GPU ID 0x9093 r0p1); abandoned |
 | Vulkan conformance | Not conformant | PanVK prints "not a conformant Vulkan implementation, testing use only" |
@@ -32,7 +46,8 @@ omarchy-desktop.service
             GLES 3.0 context ← Mesa Zink (system Mesa 26.2.5) ← PanVK (private, /opt) ← /dev/mali0 (vendor kbase r32p1)
             buffers: GBM kms_swrast allocation on /dev/dri/card0 (mediatek-drm, no render node)
             LD_PRELOAD: drm-no-cursor.so + aq-primary-zink.so
-       autostart: every app command is wrapped in /opt/omarchy-tablet/gpu/app-env → llvmpipe
+       autostart: every app command is wrapped in /opt/omarchy-tablet/gpu/app-env
+         → gpu-app-env (Zink/kopper on panvk-apps) if gpu/apps-gpu exists, else llvmpipe
 ```
 
 - **GPU and kernel.** Mali-G57 2 cores r0p1 (GPU info 0x9093). The kernel
@@ -102,7 +117,64 @@ All three are small `LD_PRELOAD` libraries in `graphics/shim/`.
 fallback) only served the abandoned libmali route; `drm-trace.c` is the
 diagnostic tracer used to find the cursor reset.
 
-### Why apps stay on llvmpipe
+### Applications and Chromium on the GPU (2026-10-31)
+
+Three separate problems kept applications off the GPU. All three were fixed
+without touching the kernel, the system Mesa or the compositor's driver.
+
+1. **Native fences (Chromium).** PanVK on kbase already turned a SYNC_FD
+   export of pending GPU work into a real `sync_file`: a kbase soft job
+   (`BASE_JD_REQ_SOFT_FENCE_TRIGGER`) that depends on the submission's last
+   atom. When the work had already finished, it returned -1 instead. Vulkan
+   allows that, but Mesa EGL reports -1 from `eglDupNativeFenceFDANDROID` as a
+   failure, and Chromium's GPU process exits on it (the "real pages" failure
+   below). `graphics/panvk/patches/panvk-kbase-signalled-export.patch` makes
+   that case, and the CPU-wait fallback, return an already-signalled
+   `sync_file`: a FENCE_TRIGGER atom with no dependency, which kbase signals
+   during the `JOB_SUBMIT` ioctl. It is made once per queue and handed out as
+   dups. `PANVK_KBASE_EXPORT_NULL_FD=1` restores the old -1. No kernel module
+   was needed (the stock kernel has no `CONFIG_SW_SYNC`).
+   This build is installed separately as
+   `/opt/omarchy-tablet/gpu/panvk-apps`; the compositor keeps `panvk-fourfect`.
+2. **Black OpenGL windows (shell, GTK, Qt, mpv).** There is no DRM render
+   node, so Mesa EGL's hardware Wayland path fails and EGL falls back to its
+   software path. With `GALLIUM_DRIVER=zink` that path runs Zink as a
+   software driver that copies finished frames into `wl_shm` buffers, and
+   those arrive black: the frame is correct in the back buffer
+   (`glReadPixels`), but the window shows black. This is why the bar went blank
+   in the first GPU attempt. The same fallback uses Zink's own Vulkan
+   swapchain ("kopper", which presents correctly, like `vkcube`) only when
+   both `LIBGL_ALWAYS_SOFTWARE=1` and `MESA_LOADER_DRIVER_OVERRIDE=zink` are
+   set (Mesa 26.2.5 `eglapi.c` / `platform_wayland.c`). But Zink also reads
+   `LIBGL_ALWAYS_SOFTWARE` and then demands a CPU Vulkan device ("ZINK: CPU
+   device requested but none found"). `graphics/shim/zink-kopper-hw.c` hides
+   that one variable from code in `libgallium` only, by checking
+   `getenv`'s caller. In that library only Zink's device choice and a
+   Windows-only d3d12 check read it.
+3. **Presenting without a CPU copy.** By default PanVK's window-system code
+   on kbase copies every frame into shared memory. `PANVK_KBASE_DRI3=1` (an
+   existing fork option) makes swapchain images shared dma-heap buffers that
+   Hyprland imports directly: 28 instead of 20 fps in the GL window test,
+   with no GPU faults.
+
+**Chromium** keeps the setting it was tested with (`GALLIUM_DRIVER=zink`,
+which is correct for its GBM/surfaceless EGL use). Its GPU process gets that
+environment from `graphics/browser-gpu/chromium-gpu-process-launcher`,
+installed as `/opt/omarchy-tablet/gpu/browser/chromium-gpu-process-launcher`
+and named by `--gpu-launcher`. It also loads the hardware video bridge on the
+decoder-ready boot, like `video/install/chromium-gpu-launcher`, but without
+that launcher's llvmpipe-only `glFinish` workaround. The normal flags change
+from `--disable-gpu-rasterization` to `--enable-gpu-rasterization`.
+
+**Everything else** gets its environment from `app-env`, which wraps every
+session autostart command, including the environment import that later app
+launches inherit. With `/opt/omarchy-tablet/gpu/apps-gpu` present it execs
+`gpu-app-env` (the three fixes above, plus the apps ICD); without it, it
+keeps the old llvmpipe profile. The autostart module clears the graphics
+variables from the systemd user manager before importing, so a variable one
+profile does not set cannot linger from UWSM.
+
+### Why apps stayed on llvmpipe (history, superseded)
 
 - Omarchy's packaged autostart imports **all** compositor variables into the
   systemd user manager and launches the shell directly. That first propagated
@@ -126,7 +198,10 @@ diagnostic tracer used to find the cursor reset.
   namespace later passed (`browser-gpu/pidns-probe`); that covers those
   probes only, not long-running sandboxed apps.
 
-### Chromium on the GPU: what was tried and why it failed
+### Chromium on the GPU: what was tried before and why it failed
+
+Superseded on 2026-10-31: the first failure below was the -1 fence export,
+fixed in the driver as described above. Kept for the record.
 
 Chromium 153.0.8010.36 (Arch Linux ARM). All trials used separate profiles
 and launchers in `graphics/browser-gpu/` and `video/trials/`; none became the
@@ -307,15 +382,80 @@ original device. Use `tools/tablet` from this repo to reach it.
 8. **Enable persistently:** `touch /opt/omarchy-tablet/gpu/enabled`, then
    reboot (the verified path) or restart `omarchy-desktop.service`.
 
+9. **Applications and Chromium on the GPU** (2026-10-31). Needs steps 1-8 and,
+   for hardware video in the GPU browser, [09-video-decoding.md](09-video-decoding.md).
+
+   a. *Second driver build with the fence patch*, next to the compositor's
+      (on any machine, then copy to the tablet; build as `hypr`):
+
+      ```sh
+      PANVK_APPS=1 graphics/panvk/fetch-panvk-source.sh panvk-apps
+      # on the tablet, source in /home/hypr/src/panvk-apps:
+      PANVK_SRC=/home/hypr/src/panvk-apps PANVK_PREFIX=/opt/omarchy-tablet/gpu/panvk-apps \
+        bash graphics/panvk/build-panvk-tablet.sh
+      meson install -C /home/hypr/src/panvk-apps/build-tablet --no-rebuild   # as root
+      ```
+
+      On the project's tablet the source was a copy of the compositor's tree
+      with the patch applied (`git apply`), and the build took 11 minutes
+      (`-j4`). The installed library's SHA-256 was
+      `8c63f59066030de8363371283ea80b9129fb4610fafcc9da9fe0e2262449a0dd`
+      (reference only, a rebuild will differ).
+
+   b. *Check the fence fix* (as `hypr`; `egl-fence-test` from `graphics/tests/`):
+
+      ```sh
+      cc -O2 graphics/tests/egl-fence-test.c -lEGL -lGLESv2 -o $d/egl-fence-test
+      icd=/opt/omarchy-tablet/gpu/panvk-apps/share/vulkan/icd.d/panfrost_icd.aarch64.json
+      for m in early late; do
+        GALLIUM_DRIVER=zink VK_DRIVER_FILES=$icd PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 \
+          PANVK_KBASE_USER_CACHE_SYNC=0 $d/egl-fence-test $m 500
+      done            # both: "fd -1: 0 ... PASS"
+      ```
+
+   c. *Install the profile pieces* (root):
+
+      ```sh
+      cc -O2 -fPIC -shared -Wall -Wextra -Werror graphics/shim/zink-kopper-hw.c -ldl \
+        -o /opt/omarchy-tablet/gpu/zink-kopper-hw.so
+      install -m0755 graphics/profile/app-env graphics/profile/gpu-app-env /opt/omarchy-tablet/gpu/
+      install -o hypr -g hypr -m0644 graphics/profile/omarchy-autostart.lua \
+        /home/hypr/.config/default/hypr/autostart.lua
+      install -D -m0755 graphics/browser-gpu/chromium-gpu-process-launcher \
+        /opt/omarchy-tablet/gpu/browser/chromium-gpu-process-launcher
+      install -D -o hypr -g hypr -m0644 graphics/profile/mpv.conf /home/hypr/.config/mpv/mpv.conf
+      ```
+
+      In `/home/hypr/.config/chromium-flags.conf` (back it up first) replace
+      `--disable-gpu-rasterization` with `--enable-gpu-rasterization`, and
+      `--gpu-launcher=/opt/omarchy-tablet/video/bin/chromium-gpu-launcher`
+      with `--gpu-launcher=/opt/omarchy-tablet/gpu/browser/chromium-gpu-process-launcher`.
+
+   d. *Try one app first*, e.g. as `hypr` in the session:
+      `/opt/omarchy-tablet/gpu/gpu-app-env nautilus`, and the shell with
+      `shell-plugin/restart-shell gpu` (expect `shell restarted (Mali GPU)`).
+      `graphics/tests/egl-wayland-test.c` (build line in the file) is the
+      minimal check: under `gpu-app-env` it must report `zink ... MESA_PANVK`
+      and the window must cycle red/green/blue, not stay black.
+
+   e. *Make it the default:* `touch /opt/omarchy-tablet/gpu/apps-gpu`, then
+      restart `omarchy-desktop.service` (or log in again). Restart Chromium
+      (`systemctl --user restart tablet-chromium-warm.service` as `hypr`, or
+      close it) to pick up the new flags.
+
 ### Verify
 
 ```sh
 pid=$(pgrep -x Hyprland)
 grep libvulkan_panfrost /proc/$pid/maps                    # private driver mapped
 ls -l /proc/$pid/fd | grep -c mali0                        # GPU in use
-for p in $(pgrep -u hypr -x quickshell) $(pgrep -u hypr -x foot); do
-  tr '\0' '\n' </proc/$p/environ | grep -E '^(GALLIUM_DRIVER|LIBGL_ALWAYS_SOFTWARE|VK_DRIVER_FILES)='
-done                                                       # apps: llvmpipe, 1, no VK_DRIVER_FILES
+q=$(pgrep -u hypr -x quickshell | head -1)
+grep -c panvk-apps/lib/libvulkan_panfrost.so /proc/$q/maps # >0: shell on the GPU (apps-gpu set)
+for p in $(pgrep -f type=gpu-process); do                 # Chromium's GPU process
+  grep -c panvk-apps /proc/$p/maps                         # >0 (the 0 line is pgrep's own shell)
+done
+runuser -u hypr -- env XDG_RUNTIME_DIR=/run/user/1001 systemctl --user show-environment \
+  | grep -E 'MESA_LOADER|VK_DRIVER_FILES|DRI3'             # what later app launches inherit
 hyprctl configerrors                                       # empty
 systemctl --failed                                         # empty
 dmesg | grep -i -E 'mali|kbase.*(fault|error)'             # no new GPU faults
@@ -325,6 +465,10 @@ On the original device, the final persistent boot showed the custom library
 mapped in Hyprland, `GALLIUM_DRIVER=llvmpipe`/`LIBGL_ALWAYS_SOFTWARE=1` in the
 shell, Foot and the user manager, empty `configerrors`, no failed units and no
 GPU faults.
+After step 9 (desktop restarted with `apps-gpu`), the shell and Chromium's
+GPU process mapped `panvk-apps`, Chromium's GPU process also mapped the video
+bridge, and the user manager held `MESA_LOADER_DRIVER_OVERRIDE=zink`, the
+apps ICD and `PANVK_KBASE_DRI3=1`.
 
 ## How to enable / disable the GPU boot
 
@@ -334,16 +478,29 @@ GPU faults.
 | GPU for the next boot only | drop-in + `touch /opt/omarchy-tablet/gpu/boot-trial`, reboot (step 7) |
 | GPU on every boot | `touch /opt/omarchy-tablet/gpu/enabled` |
 | Back to software | `/opt/omarchy-tablet/gpu/end-gpu-trial` (removes both markers, restarts the desktop) |
+| Apps and shell on the GPU | `touch /opt/omarchy-tablet/gpu/apps-gpu`, log in again (restart `omarchy-desktop.service`) |
+| Apps and shell back on llvmpipe | `rm /opt/omarchy-tablet/gpu/apps-gpu`, log in again; `shell-plugin/restart-shell software` switches only the shell, until the next login |
+| Chromium back on llvmpipe | `touch /opt/omarchy-tablet/gpu/browser/software`, restart Chromium (the GPU-process launcher then hands over to the old one; GPU rasterisation stays requested but runs on llvmpipe) |
 
 ## Pitfalls and lessons
 
 - **Never run stock `omarchy-restart-shell`.** It relaunches Quickshell from
-  Hyprland's environment, i.e. with Zink/PanVK variables. Quickshell then maps
-  layer surfaces that draw nothing: the bar is invisible but its space stays
-  reserved. Restart the shell through `app-env` instead; the repo's
-  `shell-plugin/restart-shell` ([10-touch-ui.md](10-touch-ui.md)) does that and checks the new shell has
-  `GALLIUM_DRIVER=llvmpipe`. The same applies to anything you start with
+  Hyprland's environment (`GALLIUM_DRIVER=zink`), so its windows come out
+  black (fix 2 above): the bar is invisible but its space stays reserved.
+  Restart the shell through `app-env` instead; the repo's
+  `shell-plugin/restart-shell` ([10-touch-ui.md](10-touch-ui.md)) does that and reports
+  which renderer the new shell got. The same applies to anything you start with
   `hyprctl dispatch exec`: wrap it as `/opt/omarchy-tablet/gpu/app-env CMD`.
+- **`GALLIUM_DRIVER=zink` is wrong for Wayland windows, right for Chromium.**
+  Windows need `gpu-app-env` (kopper); Chromium's GPU process needs
+  `GALLIUM_DRIVER=zink` (its launcher sets it). An app that renders correctly
+  into its back buffer but shows black is on the wrong one.
+- **mpv's Vulkan output crashes on PanVK**; keep `gpu-api=opengl`.
+- **Not tested on the GPU profile:** long sessions of the shell on the GPU
+  (only restarts and short checks), suspend/resume, battery impact, Kdenlive
+  and OBS. The two unexplained resets from the video work
+  ([09](09-video-decoding.md)) did not recur in the 4-minute soak, which
+  proves little either way.
 - **Never let the hardware cursor ioctl through.** Run Hyprland only with
   `drm-no-cursor.so` preloaded and software cursors; one unguarded
   `DRM_IOCTL_MODE_CURSOR` resets the tablet.
@@ -388,6 +545,13 @@ GPU faults.
   (environment, autostart module, desktop unit), remove
   `/home/hypr/.config/default/hypr/autostart.lua` and the udev rule, delete
   `/opt/omarchy-tablet/gpu/panvk-fourfect`.
+- Applications/browser (2026-10-31): `rm /opt/omarchy-tablet/gpu/apps-gpu`
+  and log in again; restore `chromium-flags.conf` from its backup (the
+  project's is `/opt/omarchy-tablet/backups/chromium-flags.conf.pre-gpu-*`) or
+  touch `/opt/omarchy-tablet/gpu/browser/software`. The previous `app-env`,
+  `gpu-app-env` and autostart module are in
+  `/opt/omarchy-tablet/backups/apps-gpu-*`. Remove `~hypr/.config/mpv/mpv.conf`
+  if mpv should pick its own API again.
 - No kernel, boot partition, firmware, thermal limit or clock governor was
   changed for the GPU work.
 

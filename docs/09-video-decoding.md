@@ -3,8 +3,12 @@
 Chromium decodes H264 on the MT6789 video decoder (VDEC) through the tablet's
 own MediaTek vendor stack: the stock kernel modules, the stock 32-bit Android
 `v3avpud` VCU daemon (run natively in a private chroot), and a small V4L2
-compatibility bridge loaded only into Chromium's GPU process. Rendering of the
-page and of the decoded video is still done on the CPU (llvmpipe).
+compatibility bridge loaded only into Chromium's GPU process. Since
+2026-10-31 the page and the decoded video are rendered on the Mali GPU
+([08-gpu.md](08-gpu.md#applications-and-chromium-on-the-gpu-2026-10-31)): the
+GPU process is started by `gpu/browser/chromium-gpu-process-launcher`, which
+loads the same bridge. The software-rendered setup described below (with
+`video/bin/chromium-gpu-launcher`) remains as the fallback.
 Sources: [`video/`](../video/README.md). Work dates: 2026-10-28 to 2026-10-29.
 
 ## Status
@@ -18,7 +22,7 @@ Sources: [`video/`](../video/README.md). Work dates: 2026-10-28 to 2026-10-29.
 | Survives reboot | **Works** | Controlled reboot 2026-10-28 22:01: service ready, guarded access granted, YouTube decoded in hardware again |
 | 10-minute YouTube 1080p fullscreen | Works, drops frames | 600.8 s, 18022 frames / 1652 dropped (~9.2 %), USB debug gadget unbound; no stall or media error |
 | Post-reboot YouTube 1080p | Works, drops frames | 150 s uninterrupted main content: 4505 frames / 755 dropped (~16.8 %) |
-| Browser presentation | CPU-bound | Page and video compositing run on llvmpipe at 1920x1200; browser GPU rendering failed (see [08-gpu.md](08-gpu.md)) |
+| Browser presentation | GPU since 2026-10-31 | Local 1080p30 clip: 3-6 % frames dropped on the GPU vs 10-17 % on llvmpipe; 4-minute soak 3.8-6.2 %, no reset (see [08-gpu.md](08-gpu.md)). The YouTube numbers above were taken on llvmpipe |
 | VP8 / VP9 / AV1 / HEVC | **Not validated** | The driver advertises more codecs; only H264 was ever decoded. The YouTube extension hides VP8/VP9/AV1 |
 | Protected (secure) playback | Not supported | Secure decode paths are never used |
 | HDR, 10-bit, 1080p60, 4K | Unverified | HDR/unknown colour metadata falls back to NV12; nothing beyond 1080p30 was measured |

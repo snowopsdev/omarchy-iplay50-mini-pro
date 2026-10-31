@@ -88,6 +88,6 @@ case ${1:-start} in
   files) exec omarchy launch nautilus ;;
   rotate) exec /opt/omarchy-tablet/tablet-orientation toggle ;;
   auto) exec /opt/omarchy-tablet/tablet-orientation auto ;;
-  close) exec hyprctl -q dispatch 'hl.dsp.close()' ;;
+  close) exec hyprctl -q dispatch 'hl.dsp.window.close()' ;;
   *) echo 'Usage: tablet-ui start|keyboard-start|keyboard-restart|keyboard-show|keyboard-hide|keyboard|desktop|apps|menu|terminal|browser|files|rotate|auto|close' >&2; exit 2 ;;
 esac

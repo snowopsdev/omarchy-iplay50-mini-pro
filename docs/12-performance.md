@@ -211,18 +211,21 @@ Lighter content and blocking ad scripts help. Change made: the YouTube web app
 the normal browser profile also turns mobile. Kid Mode re-learns the web app's window
 class on its first tile tap after this change.
 
-### Why apps stay on llvmpipe
+### Why apps stayed on llvmpipe (until 2026-10-31)
 
-The compositor runs on the Mali GPU through Zink/PanVK, but experimental browser Mali
-rendering failed synchronisation/scanout checks, so Chromium and other clients keep
+Superseded: since 2026-10-31 the shell, GTK 4/Qt apps and Chromium render on the Mali
+GPU ([08-gpu.md](08-gpu.md#applications-and-chromium-on-the-gpu-2026-10-31)); the
+measurements in this document were taken before that. At the time:
+the compositor ran on the Mali GPU through Zink/PanVK, but experimental browser Mali
+rendering failed synchronisation/scanout checks, so Chromium and other clients kept
 llvmpipe (eight workers). H264 decoding is hardware (Chromium `V4L2VideoDecoder`); the
 remaining video cost is Chromium rasterising and compositing on the CPU. Details:
 [`graphics/`](../graphics/) and [`video/`](../video/).
 
 ## Pitfalls
 
-- Do not restart the shell with stock `omarchy-restart-shell` (blank surfaces from the GPU
-  environment); use `shell-plugin/restart-shell`.
+- Do not restart the shell with stock `omarchy-restart-shell` (black surfaces from the
+  compositor's environment); use `shell-plugin/restart-shell`.
 - Measure with kmsgrab and `-fps_mode passthrough`, not grim bursts.
 - Animations, scheduler knobs, DDR forcing and `--disable-gpu` were all tried and did not
   address the real costs (resizes and site JavaScript).

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Run one application on the Mali GPU (Zink on the private PanVK build).
+# Selected by app-env when /opt/omarchy-tablet/gpu/apps-gpu exists; can also
+# wrap a single command.
+#
+# There is no DRM render node, so Mesa EGL's hardware Wayland path fails and
+# it falls back to its software path. With LIBGL_ALWAYS_SOFTWARE=1 plus
+# MESA_LOADER_DRIVER_OVERRIDE=zink that path presents through Zink's Vulkan
+# swapchain ("kopper"); zink-kopper-hw.so hides LIBGL_ALWAYS_SOFTWARE from
+# Zink itself so it still picks the Mali GPU. (GALLIUM_DRIVER=zink instead
+# copies frames into wl_shm buffers, and they arrive black.)
+# PANVK_KBASE_DRI3=1 makes the swapchain share dma-heap buffers with the
+# compositor instead of copying each frame through the CPU.
+icd=/opt/omarchy-tablet/gpu/panvk-apps/share/vulkan/icd.d/panfrost_icd.aarch64.json
+unset GALLIUM_DRIVER VK_ICD_FILENAMES
+unset AQ_TABLET_SOFTWARE_PRIMARY AQ_TABLET_ZINK_PRIMARY TABLET_FINISH_SOFTWARE_FRAMES
+unset MESA_GLES_VERSION_OVERRIDE MESA_GL_VERSION_OVERRIDE MESA_EXTENSION_OVERRIDE
+export LIBGL_ALWAYS_SOFTWARE=1 MESA_LOADER_DRIVER_OVERRIDE=zink
+export GBM_ALWAYS_SOFTWARE=1 VK_DRIVER_FILES=$icd PANVK_KBASE_DRI3=1
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 PANVK_KBASE_USER_CACHE_SYNC=0
+export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so:/opt/omarchy-tablet/gpu/zink-kopper-hw.so
+export UWSM_APP_UNIT_TYPE=service
+exec "$@"

@@ -1,0 +1,184 @@
+diff -ru a/src/panfrost/vulkan/jm/panvk_vX_gpu_queue.c b/src/panfrost/vulkan/jm/panvk_vX_gpu_queue.c
+--- a/src/panfrost/vulkan/jm/panvk_vX_gpu_queue.c	2026-10-31 00:02:04.146271593 -0400
++++ b/src/panfrost/vulkan/jm/panvk_vX_gpu_queue.c	2026-10-31 00:02:55.153233835 -0400
+@@ -425,6 +425,10 @@
+       uint64_t wait_none, wait_own, wait_file, wait_cpu, fence_wait_atoms;
+       uint64_t export_new, export_dup, export_done, export_cpu;
+    } stats;
++   /* Already-signalled sync_file handed out (as dups) for exports of
++    * finished work, -1 until first needed. */
++   int signaled_fd;
++   bool export_null_fd;
+ 
+    /* FourFectVK diagnostics (0076/0077), all under mtx. */
+    struct panvk_device *dev;
+@@ -1290,6 +1294,68 @@
+    return panvk_kbase_wait_seqno(data, targets[0], abs_timeout_ns);
+ }
+ 
++/* Caller holds k->mtx. An already-signalled sync_file: a FENCE_TRIGGER atom
++ * with no dependency, which kbase signals during JOB_SUBMIT. Made once,
++ * handed out as dups. The spec lets a SYNC_FD export of finished work return
++ * -1, but Mesa EGL's eglDupNativeFenceFDANDROID treats -1 as failure and
++ * Chromium's GPU process then exits. PANVK_KBASE_EXPORT_NULL_FD=1 restores
++ * the -1. */
++static VkResult
++panvk_kbase_signaled_fd_locked(struct panvk_kbase_jm *k, int *sync_file)
++{
++   *sync_file = -1;
++   if (k->export_null_fd)
++      return VK_SUCCESS;
++
++   if (k->signaled_fd < 0) {
++      uint8_t num;
++      VkResult result =
++         panvk_kbase_alloc_atoms(k, 1, &num, PANVK_KBASE_ATOM_AUX);
++      if (result != VK_SUCCESS)
++         return result;
++      /* The allocation may have dropped the lock. */
++      if (k->signaled_fd >= 0) {
++         panvk_kbase_free_atoms(k, 1, &num);
++      } else {
++         struct panvk_kbase_base_fence fence = {.fd = -1, .stream_fd = -1};
++         uint8_t atom[PANVK_KBASE_ATOM_STRIDE];
++         panvk_kbase_atom(atom, num, (uintptr_t)&fence,
++                          BASE_JD_REQ_SOFT_FENCE_TRIGGER, 0, 0, 0, 0);
++         struct kbase_ioctl_job_submit submit = {
++            .addr = (uint64_t)(uintptr_t)atom,
++            .nr_atoms = 1,
++            .stride = PANVK_KBASE_ATOM_STRIDE,
++         };
++         if (ioctl(k->fd, KBASE_IOCTL_JOB_SUBMIT, &submit)) {
++            mesa_loge("panvk: kbase signalled FENCE_TRIGGER submit failed: %s",
++                      strerror(errno));
++            panvk_kbase_free_atoms(k, 1, &num);
++            return VK_SUCCESS;
++         }
++         if (fence.fd < 0) {
++            /* The atom completes (and frees its number) with an error. */
++            mesa_loge("panvk: kbase signalled FENCE_TRIGGER gave no fd");
++            return VK_SUCCESS;
++         }
++         k->signaled_fd = fence.fd;
++      }
++   }
++
++   *sync_file = os_dupfd_cloexec(k->signaled_fd);
++   return *sync_file < 0 ? VK_ERROR_OUT_OF_HOST_MEMORY : VK_SUCCESS;
++}
++
++/* panvk_device::kbase_signaled_sync_file. */
++static VkResult
++panvk_kbase_signaled_sync_file_cb(void *data, int *sync_file)
++{
++   struct panvk_kbase_jm *k = data;
++   mtx_lock(&k->mtx);
++   VkResult result = panvk_kbase_signaled_fd_locked(k, sync_file);
++   mtx_unlock(&k->mtx);
++   return result;
++}
++
+ /* panvk_kbase_sync_export_func: a FENCE_TRIGGER atom after the submission,
+  * one per submission (later exports get a dup of the same sync_file). */
+ static VkResult
+@@ -1360,14 +1426,19 @@
+          result = VK_ERROR_OUT_OF_HOST_MEMORY;
+       break;
+    }
+-   if (cpu_wait)
++   if (cpu_wait) {
+       k->stats.export_cpu++;
+-   else if (*sync_file < 0 && result == VK_SUCCESS)
++   } else if (*sync_file < 0 && result == VK_SUCCESS) {
+       k->stats.export_done++;
++      result = panvk_kbase_signaled_fd_locked(k, sync_file);
++   }
+    mtx_unlock(&k->mtx);
+ 
+-   if (cpu_wait && result == VK_SUCCESS)
++   if (cpu_wait && result == VK_SUCCESS) {
+       result = panvk_kbase_wait_seqno(k, seqno, OS_TIMEOUT_INFINITE);
++      if (result == VK_SUCCESS)
++         result = panvk_kbase_signaled_sync_file_cb(k, sync_file);
++   }
+    return result;
+ }
+ 
+@@ -1928,6 +1999,8 @@
+    k->ctrl_no_fence_wait_dep =
+       pan_env_flag("PANVK_KBASE_CTRL_NO_FENCE_WAIT_DEP") != NULL;
+    k->ctrl_export_early = pan_env_flag("PANVK_KBASE_CTRL_EXPORT_EARLY") != NULL;
++   k->signaled_fd = -1;
++   k->export_null_fd = pan_env_flag("PANVK_KBASE_EXPORT_NULL_FD") != NULL;
+    k->dev = device;
+    k->chain_enabled = panvk_kbase_chain_enabled();
+    k->no_signal = pan_env_flag("PANVK_KBASE_NO_SIGNAL") != NULL;
+@@ -1976,6 +2049,8 @@
+    }
+    if (k->chain.wait_fd >= 0)
+       close(k->chain.wait_fd);
++   if (k->signaled_fd >= 0)
++      close(k->signaled_fd);
+    u_cnd_monotonic_destroy(&k->cnd);
+    mtx_destroy(&k->mtx);
+    vk_free(&device->vk.alloc, k);
+@@ -2014,6 +2089,8 @@
+    result = panvk_kbase_jm_create(device, &queue->kjm);
+    if (result != VK_SUCCESS)
+       goto err_finish_queue;
++   device->kbase_signaled_sync_file = panvk_kbase_signaled_sync_file_cb;
++   device->kbase_signaled_data = queue->kjm;
+ 
+    queue->vk.driver_submit = panvk_per_arch(gpu_queue_submit);
+    *out_queue = &queue->vk;
+@@ -2033,6 +2110,10 @@
+    struct panvk_device *dev = to_panvk_device(vk_queue->base.device);
+ 
+    vk_queue_finish(&queue->vk);
++   if (dev->kbase_signaled_data == queue->kjm) {
++      dev->kbase_signaled_sync_file = NULL;
++      dev->kbase_signaled_data = NULL;
++   }
+    panvk_kbase_jm_destroy(dev, queue->kjm);
+    /* PATCH: no drm_syncobj to destroy */
+    vk_free(&dev->vk.alloc, queue);
+diff -ru a/src/panfrost/vulkan/panvk_device.h b/src/panfrost/vulkan/panvk_device.h
+--- a/src/panfrost/vulkan/panvk_device.h	2026-10-31 00:02:04.152505481 -0400
++++ b/src/panfrost/vulkan/panvk_device.h	2026-10-31 00:02:55.151626352 -0400
+@@ -155,6 +155,11 @@
+    };
+ 
+    int drm_fd;
++
++   /* kbase: makes an already-signalled sync_file, for a SYNC_FD export of
++    * work that has finished (set by the JM queue, NULL otherwise). */
++   VkResult (*kbase_signaled_sync_file)(void *data, int *sync_file);
++   void *kbase_signaled_data;
+ };
+ 
+ VK_DEFINE_HANDLE_CASTS(panvk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
+diff -ru a/src/panfrost/vulkan/panvk_physical_device.c b/src/panfrost/vulkan/panvk_physical_device.c
+--- a/src/panfrost/vulkan/panvk_physical_device.c	2026-10-31 00:02:04.148520255 -0400
++++ b/src/panfrost/vulkan/panvk_physical_device.c	2026-10-31 00:02:55.154027946 -0400
+@@ -1102,8 +1102,9 @@
+ /* SYNC_FD export. An imported sync_file is handed back as a dup. Pending
+  * work from our own queue becomes a kernel fence through pending_export (a
+  * kbase FENCE_TRIGGER atom, Phase 8.15). Without one, wait for the work on
+- * the CPU and export -1 ("already signaled", allowed by the spec for
+- * SYNC_FD): correct, but it serializes the caller with the GPU. */
++ * the CPU and export an already-signalled sync_file from the queue (-1 if
++ * there is none; allowed by the spec, but EGL native-fence users fail on
++ * it). */
+ static VkResult
+ kbase_cpu_sync_export_sync_file(struct vk_device *device, struct vk_sync *sync,
+                                 int *sync_file)
+@@ -1136,6 +1137,9 @@
+    if (result != VK_SUCCESS)
+       return result;
+    *sync_file = -1;
++   struct panvk_device *dev = to_panvk_device(device);
++   if (dev->kbase_signaled_sync_file)
++      return dev->kbase_signaled_sync_file(dev->kbase_signaled_data, sync_file);
+    return VK_SUCCESS;
+ }
+ 

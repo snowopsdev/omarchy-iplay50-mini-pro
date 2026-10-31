@@ -8,6 +8,9 @@
 #                 commit 08aa2e62580e447b28fe419d8995b84d8d6f1fff
 #                 patches-upstream/0001..0005, applied in order
 #   This repo     patches/fourfect-kbase-only-build.patch
+#                 patches/panvk-kbase-signalled-export.patch, only with
+#                 PANVK_APPS=1 (the build for applications and Chromium;
+#                 the compositor keeps the build without it)
 #
 # NEW helper written for the public repo (the original tree was assembled by
 # hand with the same inputs). The result was checked to be byte-identical to
@@ -34,7 +37,11 @@ git -C "$NOTES" remote add origin https://github.com/Noysz/panvk-g99-jm.git
 git -C "$NOTES" fetch --depth 1 origin "$NOTES_COMMIT" || git -C "$NOTES" fetch origin
 git -C "$NOTES" checkout -q "$NOTES_COMMIT"
 
-for p in "$NOTES"/patches-upstream/000[1-5]-*.patch "$HERE/patches/fourfect-kbase-only-build.patch"; do
+patches=("$NOTES"/patches-upstream/000[1-5]-*.patch "$HERE/patches/fourfect-kbase-only-build.patch")
+if [ "${PANVK_APPS:-0}" = 1 ]; then
+  patches+=("$HERE/patches/panvk-kbase-signalled-export.patch")
+fi
+for p in "${patches[@]}"; do
   echo "applying $(basename "$p")"
   git -C "$OUT" apply --check "$p"
   git -C "$OUT" apply "$p"

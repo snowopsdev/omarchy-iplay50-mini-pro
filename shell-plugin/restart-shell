@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
-# Public-repo adaptation: uses the shared SSH helper tools/tablet; not re-run against the device.
+# Public-repo adaptation: uses the shared SSH helper tools/tablet.
 # Restart only the tablet's Omarchy shell (bar + plugins); apps keep running.
 # Needed after plugin code changes: keepLoaded plugins are not hot-replaced.
-# Do NOT use stock omarchy-restart-shell here: it relaunches from Hyprland's GPU
-# (Zink) environment and Quickshell then maps blank surfaces. The session
-# autostart wraps the shell in gpu/app-env (llvmpipe); do the same.
+# Do NOT use stock omarchy-restart-shell here: it relaunches from Hyprland's
+# compositor environment (GALLIUM_DRIVER=zink), and Quickshell then maps blank
+# surfaces. The session autostart wraps the shell in gpu/app-env; do the same.
+# `restart-shell gpu` / `restart-shell software` force one renderer for this
+# run (gpu/gpu-app-env or the llvmpipe profile); the default follows app-env.
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-exec "$REPO/tools/tablet" 'bash -s' <<'REMOTE'
+exec "$REPO/tools/tablet" "MODE=${1:-auto} bash -s" <<'REMOTE'
 set -euo pipefail
+case $MODE in
+  gpu) wrap=/opt/omarchy-tablet/gpu/gpu-app-env ;;
+  software) wrap="env TABLET_APPS_GPU=0 /opt/omarchy-tablet/gpu/app-env" ;;
+  *) wrap=/opt/omarchy-tablet/gpu/app-env ;;
+esac
 u() { runuser -u hypr -- env XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1 LANG=C.UTF-8 \
   HYPRLAND_INSTANCE_SIGNATURE=$(ls -t /run/user/1001/hypr | head -1) "$@"; }
 dir=/opt/omarchy-tablet/omarchy-runtime/shell
 while u timeout 30 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
 for _ in $(seq 100); do pgrep -u hypr -x quickshell >/dev/null || break; sleep 0.1; done
-u hyprctl -q dispatch 'hl.dsp.exec_cmd("/opt/omarchy-tablet/gpu/app-env omarchy-launch-shell")'
+u hyprctl -q dispatch "hl.dsp.exec_cmd(\"$wrap omarchy-launch-shell\")"
 for _ in $(seq 150); do
   if u quickshell ipc -p "$dir" call shell ping >/dev/null 2>&1; then
     q=$(pgrep -u hypr -x quickshell | head -1)
-    tr '\0' '\n' < /proc/$q/environ | grep -q '^GALLIUM_DRIVER=llvmpipe$' && { echo "shell restarted (llvmpipe)"; exit 0; }
-    echo "shell restarted WITHOUT software rendering" >&2; exit 1
+    sleep 1
+    if grep -q panvk-apps/lib/libvulkan_panfrost.so /proc/$q/maps; then
+      echo "shell restarted (Mali GPU)"; exit 0
+    elif tr '\0' '\n' < /proc/$q/environ | grep -q '^GALLIUM_DRIVER=llvmpipe$'; then
+      echo "shell restarted (llvmpipe)"; exit 0
+    fi
+    echo "shell restarted on an unknown renderer (check for blank surfaces)" >&2; exit 1
   fi
   sleep 0.2
 done

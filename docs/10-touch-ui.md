@@ -170,8 +170,10 @@ then asks the shell to `rescanPlugins` and `reloadConfig`. Backups:
 strips any `tablet.*` bar entries.
 
 `restart-shell` kills Quickshell for the Omarchy runtime and relaunches
-`omarchy-launch-shell` through `gpu/app-env`, then checks that the new process has
-`GALLIUM_DRIVER=llvmpipe`. Expected output: `shell restarted (llvmpipe)`.
+`omarchy-launch-shell` through `gpu/app-env`, then reports the renderer the new
+process got: `shell restarted (Mali GPU)` when `gpu/apps-gpu` is set (the default
+since 2026-10-31, see [08-gpu.md](08-gpu.md)), otherwise `shell restarted (llvmpipe)`.
+`restart-shell gpu` or `restart-shell software` forces one for this run.
 
 ### 6. Verify
 
@@ -294,8 +296,9 @@ Keyboard / input:
 
 Shell plugin / Quickshell / QML:
 - **Never run stock `omarchy-restart-shell` on this tablet.** It relaunches the shell
-  from Hyprland's GPU (Zink) environment; Quickshell then maps layer surfaces that draw
-  nothing (bar invisible, space still reserved). Use `shell-plugin/restart-shell`.
+  from Hyprland's environment (`GALLIUM_DRIVER=zink`); Quickshell then maps layer
+  surfaces that come out black (bar invisible, space still reserved). Use
+  `shell-plugin/restart-shell`.
 - `keepLoaded` plugins are not hot-replaced on file change (the old component stays
   cached): restart the shell after every plugin edit.
 - Third-party plugins cannot rely on the host's `shell.appLibrary` facade (null, later
