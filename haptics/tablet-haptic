@@ -1,0 +1,8 @@
+#!/bin/sh
+# tablet-haptic [MS]  - one vibration pulse of MS milliseconds (default 30).
+# Needs 99-tablet-haptics.rules (transient trigger, input-group access).
+v=/sys/class/leds/vibrator
+ms=${1:-30}
+case $ms in ''|*[!0-9]*) echo "usage: tablet-haptic [MS]" >&2; exit 2;; esac
+[ -w "$v/activate" ] || { echo "tablet-haptic: $v/activate not writable" >&2; exit 1; }
+echo "$ms" > "$v/duration" && echo 1 > "$v/activate"

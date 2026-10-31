@@ -1,0 +1,18 @@
+[Unit]
+Description=Tablet GPS: vendor mnld daemon in a private Bionic root
+Requires=omarchy-hw.service
+# Shares the read-only Android system image and runtime APEX that the video
+# (VCU) runtime mounts.
+Wants=omarchy-tablet-vcu.service
+After=omarchy-hw.service omarchy-tablet-vcu.service
+StopWhenUnneeded=yes
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'grep -q "^gps_pwr " /proc/modules || insmod /vendor_dlkm/lib/modules/gps_pwr.ko; grep -q "^gps_drv_stp " /proc/modules || insmod /vendor_dlkm/lib/modules/gps_drv_stp.ko'
+ExecStartPre=/bin/sh -c 'mountpoint -q /opt/omarchy-tablet/gps/vndk-v31/mnt || mount -o ro,loop /opt/omarchy-tablet/gps/vndk-v31/apex_payload.img /opt/omarchy-tablet/gps/vndk-v31/mnt'
+ExecStartPre=/bin/mountpoint -q /opt/omarchy-tablet/video/android-system
+RuntimeDirectory=omarchy-tablet-gps
+ExecStart=/usr/bin/unshare -m -p -f --mount-proc /opt/omarchy-tablet/gps/gps-runtime-inner.sh
+Restart=on-failure
+RestartSec=5

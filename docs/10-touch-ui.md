@@ -1,4 +1,4 @@
-# 10 - Touch UI: keyboard, bar, "Home & Dock" shell plugin, Kid Mode
+# 10 - Touch UI: keyboard, haptics, bar, "Home & Dock" shell plugin, Kid Mode
 
 This covers the touch layer on top of the native Omarchy session: a patched
 [wvkbd](https://github.com/jjsullivan5196/wvkbd) on-screen keyboard that follows
@@ -13,6 +13,7 @@ Files in this repo:
 | Path | What |
 |---|---|
 | `touch-ui/wvkbd/tablet-wvkbd-v0.20.patch` | Our changes against upstream wvkbd v0.20 (`main.c`, `keyboard.c/.h`, `layout.mobintl.h`, new `tablet-layouts.h`, `config.mobintl.h`, `Makefile`) |
+| `haptics/99-tablet-haptics.rules`, `haptics/tablet-haptic` | Vibration motor: udev rule (timed pulses, desktop-user access) and a `tablet-haptic [MS]` helper |
 | `touch-ui/wvkbd/build.sh` | Clone v0.20, verify the commit, apply the patch, build (`host` or on the `tablet`) |
 | `touch-ui/tests/{keyboard-test.c,run.sh}` | Host test of the real keyboard state machine and renderer |
 | `touch-ui/rootfs/tablet-ui` | Keyboard lifecycle + fixed action dispatcher (installed at `/opt/omarchy-tablet/ui/tablet-ui`) |
@@ -31,6 +32,7 @@ Files in this repo:
 |---|---|---|
 | Keyboard: one character per tap, sticky Super/Ctrl/Alt/Shift, 123/Fn/Desktop pages | Works | User physically typed in Apps search and Terminal; Super → f fullscreen/restore; Desktop Copy/Paste without stuck modifiers (2026-10-28) |
 | Keyboard follows text focus (`--auto`), 180 ms debounced auto-hide | Works (injected touch) | Keys rise on foot/Chromium omnibox focus and hide on tapping a page; six focus switches between two terminals caused zero keyboard close/open |
+| Vibration on every key press (20 ms; `WVKBD_HAPTIC_MS=0` turns it off) | Works (injected touch) | 2026-10-30: an injected tap on a key gave a 24 ms motor pulse (driver log); requested 15/25/40/80 ms pulses measured 16/31/43/83 ms. Not yet felt by hand |
 | Hide key on every page; bar keyboard glyph | Works (injected touch) | Two taps on `e` typed exactly `ee`, two Backspaces erased them |
 | Home, dock, handle (tap = peek, swipe up = Home), Open apps (switch, ×) | Works in landscape (injected touch) | 2026-10-29; × closed only the chosen window |
 | Rotation: handle/dock drawn at the right size after rotating | Fixed | 6/6 rotations correct by 1.5 s; screenshots in both orientations |
@@ -110,6 +112,32 @@ restart; the shell hot-reloads bar JSON. Differences from the original script: t
 `scp` became a tar stream through `tools/tablet`, and missing files are tolerated in the
 backup step (first install). The original revised script was itself only
 syntax/artifact-checked; the live install was done manually before it.
+
+### 3a. Vibration motor (haptics)
+
+The motor is the vendor `regulator_vibrator` driver, exposed as the LED
+`/sys/class/leds/vibrator` (already loaded with the other vendor modules). As root:
+
+```sh
+install -m0644 haptics/99-tablet-haptics.rules /etc/udev/rules.d/
+install -D -m0755 haptics/tablet-haptic /opt/omarchy-tablet/haptics/tablet-haptic
+ln -sf /opt/omarchy-tablet/haptics/tablet-haptic /usr/local/bin/tablet-haptic
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=leds --sysname-match=vibrator
+```
+
+Check: `cat /sys/class/leds/vibrator/trigger` shows `[transient]`, `state` is `1`,
+and `activate`, `duration`, `state` are group `input`, mode 0664. As `hypr`,
+`tablet-haptic 40` gives one short buzz; `dmesg | grep vibr` shows
+`vibr enable` / `vibr disable` about 40 ms apart. The keyboard from step 3
+(patch already includes it) then pulses on every key press; set
+`WVKBD_HAPTIC_MS` (1-200, 0 = off) in the keyboard's environment to change it.
+
+**Pitfall:** the transient trigger's `state` defaults to 0, which means "off for
+`duration`, then on": every pulse leaves the motor running until the next
+write. The rule sets `state` to 1. If the motor ever keeps running, stop it
+with `echo 0 > /sys/class/leds/vibrator/brightness` (this also clears the
+trigger; re-run the `udevadm trigger` line).
 
 ### 4. Hand the input-method slot to wvkbd (fcitx5 drop-in)
 
@@ -302,6 +330,9 @@ Shell plugin / Quickshell / QML:
 - Keyboard: restore `wvkbd-mobintl` and `tablet-ui` **together** from
   `/opt/omarchy-tablet/backups/touch-keyboard-*`, then restart only the keyboard
   (`tablet-ui keyboard-restart` as hypr, as in the Kid Mode recovery above).
+- Haptics: delete `/etc/udev/rules.d/99-tablet-haptics.rules` and
+  `echo none > /sys/class/leds/vibrator/trigger`; the keyboard then skips
+  vibration silently (it cannot open the files).
 - fcitx5: delete `~hypr/.config/systemd/user/omarchy-fcitx5.service.d/tablet.conf`, then
   `systemctl --user daemon-reload && systemctl --user restart omarchy-fcitx5` as hypr.
 - None of this touches packaged Omarchy files, Hyprland Lua, the desktop service, GPU

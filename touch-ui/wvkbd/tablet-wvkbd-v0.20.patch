@@ -1,6 +1,6 @@
 diff -ruN a/config.mobintl.h b/config.mobintl.h
---- a/config.mobintl.h	2026-07-24 17:16:05.000000000 -0400
-+++ b/config.mobintl.h	2026-10-28 19:00:16.870408948 -0400
+--- a/config.mobintl.h
++++ b/config.mobintl.h
 @@ -3,7 +3,7 @@
  
  #define DEFAULT_FONT "Sans 14"
@@ -11,9 +11,61 @@ diff -ruN a/config.mobintl.h b/config.mobintl.h
  
  struct clr_scheme schemes[] = {
 diff -ruN a/keyboard.c b/keyboard.c
---- a/keyboard.c	2026-07-24 17:16:05.000000000 -0400
-+++ b/keyboard.c	2026-10-28 19:02:51.632717725 -0400
-@@ -323,6 +323,14 @@
+--- a/keyboard.c
++++ b/keyboard.c
+@@ -4,6 +4,10 @@
+ #include <stdio.h>
+ #include <sys/mman.h>
+ #include <ctype.h>
++#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
+ #include "keyboard.h"
+ #include "drw.h"
+ #include "os-compatibility.h"
+@@ -20,6 +24,40 @@
+ #endif
+ #include KEYMAP
+ 
++/* Tablet: short vibration on each key press, through the vibrator LED's
++ * "transient" trigger (set up by 99-tablet-haptics.rules). Length in ms from
++ * WVKBD_HAPTIC_MS (default 20, 0 = off). Silently off if the files are not
++ * writable. */
++static void
++kbd_haptic(void)
++{
++    static int fd_dur = -2, fd_act = -1;
++    static char ms[12];
++
++    if (fd_dur == -2) {
++        const char *e = getenv("WVKBD_HAPTIC_MS");
++        int v = e ? atoi(e) : 20;
++        fd_dur = -1;
++        if (v <= 0 || v > 200)
++            return;
++        snprintf(ms, sizeof(ms), "%d", v);
++        fd_dur = open("/sys/class/leds/vibrator/duration", O_WRONLY | O_CLOEXEC);
++        fd_act = open("/sys/class/leds/vibrator/activate", O_WRONLY | O_CLOEXEC);
++        if (fd_dur < 0 || fd_act < 0) {
++            if (fd_dur >= 0)
++                close(fd_dur);
++            if (fd_act >= 0)
++                close(fd_act);
++            fd_dur = fd_act = -1;
++        }
++    }
++    if (fd_dur < 0)
++        return;
++    /* duration is shared with tablet-haptic, so set it every time */
++    if (pwrite(fd_dur, ms, strlen(ms), 0) > 0)
++        (void)!pwrite(fd_act, "1", 1, 0);
++}
++
+ void
+ kbd_switch_layout(struct kbd *kb, struct layout *l, size_t layer_index)
+ {
+@@ -323,6 +361,14 @@
              }
          }
  
@@ -28,7 +80,7 @@ diff -ruN a/keyboard.c b/keyboard.c
          if (unlatch_shift) {
              if (kb->debug) fprintf(stderr, "unlatch shift");
              kb->mods ^= Shift;
-@@ -345,10 +353,13 @@
+@@ -345,10 +391,13 @@
              zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, AltGr, WL_KEYBOARD_KEY_STATE_RELEASED);
          }
  
@@ -43,7 +95,7 @@ diff -ruN a/keyboard.c b/keyboard.c
          if (kb->compose >= 2) {
              kb->compose = 0;
              kbd_switch_layout(kb, kb->last_abc_layout, kb->last_abc_index);
-@@ -363,6 +374,21 @@
+@@ -363,6 +412,21 @@
  }
  
  void
@@ -65,7 +117,15 @@ diff -ruN a/keyboard.c b/keyboard.c
  kbd_release_key(struct kbd *kb, uint32_t time)
  {
      kbd_unpress_key(kb, time);
-@@ -427,6 +453,11 @@
+@@ -406,6 +470,7 @@
+ void
+ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+ {
++    kbd_haptic();
+     if ((kb->compose == 1) && (k->type != Compose) && (k->type != Mod)) {
+         if ((k->type == NextLayer) || (k->type == BackLayer) ||
+             ((k->type == Code) && (k->code == KEY_SPACE))) {
+@@ -427,6 +492,11 @@
      }
  
      switch (k->type) {
@@ -77,7 +137,7 @@ diff -ruN a/keyboard.c b/keyboard.c
      case Code:
          if (k->code_mod) {
              zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, k->code_mod, WL_KEYBOARD_KEY_STATE_PRESSED);
-@@ -435,13 +466,12 @@
+@@ -435,13 +505,12 @@
                                                    0);
              } else {
                  zwp_virtual_keyboard_v1_modifiers(
@@ -92,7 +152,7 @@ diff -ruN a/keyboard.c b/keyboard.c
          if ((kb->shift_space_is_tab) && (k->code == KEY_SPACE) && (kb->mods & Shift)) {
              // shift space is tab
              zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, Shift, WL_KEYBOARD_KEY_STATE_RELEASED);
-@@ -452,6 +482,8 @@
+@@ -452,6 +521,8 @@
              zwp_virtual_keyboard_v1_key(kb->vkbd, time, kb->last_press->code,
                                          WL_KEYBOARD_KEY_STATE_PRESSED);
          }
@@ -101,7 +161,7 @@ diff -ruN a/keyboard.c b/keyboard.c
          if (kb->print || kb->print_intersect)
              kbd_print_key_stdout(kb, k);
          if (kb->compose) {
-@@ -629,6 +661,9 @@
+@@ -629,6 +700,9 @@
  void
  kbd_draw_key(struct kbd *kb, struct key *k, enum key_draw_type type)
  {
@@ -111,7 +171,7 @@ diff -ruN a/keyboard.c b/keyboard.c
      const char *label = ((kb->mods & Shift)||((kb->mods & CapsLock) && 
          strlen(k->label) == 1 && isalpha(k->label[0]))) ? k->shift_label : k->label;
      if (kb->debug)
-@@ -689,6 +724,9 @@
+@@ -689,6 +763,9 @@
  void
  kbd_draw_layout(struct kbd *kb)
  {
@@ -122,8 +182,8 @@ diff -ruN a/keyboard.c b/keyboard.c
      struct key *next_key = kb->layout->keys;
      if (kb->debug)
 diff -ruN a/keyboard.h b/keyboard.h
---- a/keyboard.h	2026-07-24 17:16:05.000000000 -0400
-+++ b/keyboard.h	2026-10-28 19:00:16.870255415 -0400
+--- a/keyboard.h
++++ b/keyboard.h
 @@ -14,6 +14,7 @@
  
  enum key_type {
@@ -157,8 +217,8 @@ diff -ruN a/keyboard.h b/keyboard.h
  void kbd_press_key(struct kbd *kb, struct key *k, uint32_t time);
  void kbd_print_key_stdout(struct kbd *kb, struct key *k);
 diff -ruN a/layout.mobintl.h b/layout.mobintl.h
---- a/layout.mobintl.h	2026-07-24 17:16:05.000000000 -0400
-+++ b/layout.mobintl.h	2026-10-29 13:13:53.676722616 -0400
+--- a/layout.mobintl.h
++++ b/layout.mobintl.h
 @@ -11,6 +11,12 @@
  /* layout declarations */
  enum layout_id {
@@ -196,8 +256,8 @@ diff -ruN a/layout.mobintl.h b/layout.mobintl.h
 +
 +#include "tablet-layouts.h"
 diff -ruN a/main.c b/main.c
---- a/main.c	2026-07-24 17:16:05.000000000 -0400
-+++ b/main.c	2026-10-29 17:07:27.184481095 -0400
+--- a/main.c
++++ b/main.c
 @@ -11,6 +11,7 @@
  #include <string.h>
  #include <sys/mman.h>
@@ -413,8 +473,8 @@ diff -ruN a/main.c b/main.c
                  pipewarn();
          }
 diff -ruN a/Makefile b/Makefile
---- a/Makefile	2026-07-24 17:16:05.000000000 -0400
-+++ b/Makefile	2026-10-28 19:01:21.461636059 -0400
+--- a/Makefile
++++ b/Makefile
 @@ -31,7 +31,7 @@
  
  all: ${BIN} ${DOCS}
@@ -434,8 +494,8 @@ diff -ruN a/Makefile b/Makefile
  wvkbd-${LAYOUT}: $(BUILDDIR)/config.h $(OBJECTS) layout.${LAYOUT}.h
  	$(CC) -o wvkbd-${LAYOUT} $(OBJECTS) $(LDFLAGS)
 diff -ruN a/tablet-layouts.h b/tablet-layouts.h
---- a/tablet-layouts.h	1969-12-31 19:00:00.000000000 -0500
-+++ b/tablet-layouts.h	2026-10-29 13:13:53.677261963 -0400
+--- a/tablet-layouts.h
++++ b/tablet-layouts.h
 @@ -0,0 +1,92 @@
 +/* Native tablet layouts. All pages use five rows; keep keys at least 52 logical
 + * pixels high in landscape at the deployment's 260px keyboard height.

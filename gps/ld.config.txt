@@ -1,0 +1,15 @@
+# Private GPS (mnld) runtime only; installed inside its private root.
+# Mirrors Android: vendor code + VNDK v31 in "default", LLNDK libraries
+# (liblog, libc, ...) resolved from the newer system image in "system".
+dir.tablet_gps = /vendor/bin
+
+[tablet_gps]
+additional.namespaces = system
+namespace.default.isolated = true
+namespace.default.search.paths = /vendor/${LIB}/mt6789:/vendor/${LIB}:/apex/com.android.vndk.v31/${LIB}
+namespace.default.permitted.paths = /gps-shim/${LIB}:/vendor/${LIB}:/apex/com.android.vndk.v31/${LIB}
+namespace.default.links = system
+namespace.default.link.system.shared_libs = libc.so:libm.so:libdl.so:liblog.so:libvndksupport.so:libnativewindow.so:libsync.so:libbinder_ndk.so:libandroid_net.so:libselinux.so:libcgrouprc.so:libmediandk.so:libvulkan.so:libEGL.so:libGLESv2.so
+namespace.system.isolated = true
+namespace.system.search.paths = /apex/com.android.runtime/${LIB}/bionic:/system/${LIB}
+namespace.system.permitted.paths = /apex/com.android.runtime/${LIB}/bionic:/system/${LIB}

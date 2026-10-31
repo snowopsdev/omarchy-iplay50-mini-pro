@@ -1,11 +1,11 @@
-# 07 - Audio (built-in speaker via PipeWire)
+# 07 - Audio (built-in speaker and microphone via PipeWire)
 
-The built-in speaker works through PipeWire/WirePlumber on the stock vendor
+The built-in speaker and the built-in microphone work through PipeWire/WirePlumber on the stock vendor
 ALSA stack (MT6789 AFE + MT6366 codec, ALSA card `mt6789-mt6366`, kernel
 driven by the shipped vendor modules). No kernel, module, firmware or
 partition change is involved: the fix is entirely userspace configuration.
 
-Work dates: 2026-10-28. Files: [`audio/`](../audio).
+Work dates: 2026-10-28 (speaker), 2026-10-30 (microphone). Files: [`audio/`](../audio).
 
 ## Status
 
@@ -15,11 +15,12 @@ Work dates: 2026-10-28. Files: [`audio/`](../audio).
 | Profile/sink survives reboot and WirePlumber restart | Works | `wpctl status` shows `Built-in Audio Tablet speakers`, active profile `HiFi`, volume retained |
 | Volume control | Works | Software volume in PipeWire; the packaged Omarchy shell `omarchy.audio` bar widget is placed on the touch bar (see [docs/04](04-omarchy.md) and [docs/10](10-touch-ui.md)) |
 | Stereo channel separation on the speaker(s) | Unverified | Vendor policy exposes the speaker as stereo; physical L/R separation was never checked |
-| Built-in microphone | Not working / unvalidated | Capture PCM `hw:0,9` (`Capture_1`) fails `snd_pcm_hw_params` with `EINVAL` in PipeWire's probe; deliberately left out of the profile |
+| Built-in microphone, PipeWire source "Internal microphone" | **Works** (measured, not yet tried by voice) | Recorded through PipeWire (`pw-record`) while the speaker played a 440 Hz tone: the tone is 140x above the quiet level, at the right pitch and length. Level is modest (room noise about -73 dBFS, the speaker tone about -58 dBFS at maximum analog gain); raise the source volume in PipeWire if voices are quiet |
+| Second analog mic input (AIN2, vendor "mic2") | No signal | Silent at the electrical noise floor (-87 dBFS); nothing appears to be wired to it on this unit |
 | 3.5 mm headphones, headset mic, jack detection | Unvalidated | Never tested; jack input device exists but its switch bits were not confirmed |
 | Bluetooth audio | Unvalidated | Not attempted |
 | Raw ALSA `hw:0,0` with `snd_pcm_drain()` | **Unsafe** | Resets the tablet (watchdog reboot). Use the `tablet_speaker` PCM or PipeWire |
-| S32LE playback | Broken | Plays at roughly half speed (a 6 s file took about twice as long); S16LE is forced |
+| S32LE playback and capture | Broken | Playback runs at roughly half speed; capture comes out at double pitch (two real frames per S32 frame). S16LE is forced on both the sink and the source |
 
 ## Prerequisites
 
@@ -45,9 +46,9 @@ Work dates: 2026-10-28. Files: [`audio/`](../audio).
 | File | Installed as | Purpose |
 | --- | --- | --- |
 | `ucm2/MediaTek/mt6789-mt6366/mt6789-mt6366.conf` | `/usr/share/alsa/ucm2/MediaTek/mt6789-mt6366/` | UCM card file: private `tablet_speaker` PCM with `drain_silence 0`, single `HiFi` use case, safe boot sequence (amp off, muxes open) |
-| `ucm2/MediaTek/mt6789-mt6366/HiFi.conf` | same directory | `HiFi` verb (DL1 to ADDA) and the only device, `Speaker` (headphone-buffer speaker route, fixed gain 10) |
+| `ucm2/MediaTek/mt6789-mt6366/HiFi.conf` | same directory | `HiFi` verb (DL1 to ADDA, plus the mic route AIN0 to UL1), device `Speaker` (headphone-buffer speaker route, fixed gain 10) and device `Mic` (capture PCM `hw:N,9`, 2 ch, 48 kHz) |
 | `tablet-speaker.conf` | `/etc/alsa/conf.d/99-tablet-speaker.conf` | Standalone `tablet_speaker` PCM for direct ALSA diagnostics |
-| `51-tablet-speaker.conf` | `~hypr/.config/wireplumber/wireplumber.conf.d/` | WirePlumber rule: UCM on, pro-audio off, probe rate 48000, speaker sink forced to S16LE. Its first comment line ("Discovery candidate ...") is stale; the file is byte-identical to the validated installed copy |
+| `51-tablet-speaker.conf` | `~hypr/.config/wireplumber/wireplumber.conf.d/` | WirePlumber rule: UCM on, pro-audio off, probe rate 48000, speaker sink and mic source forced to S16LE. Its first comment line ("Discovery candidate ...") is stale; the file is byte-identical to the installed copy |
 | `install-ucm.sh` | run on the tablet | Copies the UCM tree, creates the `conf.d/<driver>/<name>.conf` lookup links from `alsactl info`, installs the two `.conf` files above |
 | `test-speaker.sh` | run on the tablet | Plays a WAV through the normal PipeWire output with `pw-play` (no mixer changes) |
 | `make-tone.py` | run anywhere | Generates the quiet test tone (48 kHz, S16LE, stereo, 440 Hz, -30 dBFS; 1.5 s left, 1.5 s right, 1.5 s both). Reconstructed from the recorded parameters; the original generator was not kept, so the output is not byte-identical to the tone used during bring-up |
@@ -148,7 +149,7 @@ As `hypr`:
 ```bash
 wpctl status          # Sinks: "* Built-in Audio Tablet speakers"
 pactl list cards | grep -E 'HiFi: Tablet speakers|Active Profile'
-                      # HiFi: Tablet speakers (sinks: 1, sources: 0, ... available: yes)
+                      # HiFi: Tablet speakers and microphone (sinks: 1, sources: 1, ...)
                       # Active Profile: HiFi
 pactl get-default-sink   # alsa_output.platform-soc_sound.HiFi__Speaker__sink
 ```
@@ -182,6 +183,18 @@ Ext_Speaker_Amp On; LINEOUT L Off.
 `diag/audio-status.sh` (root) gives a read-only summary of packages,
 permissions, card, PipeWire and mixer state. Compare installed files with
 `sha256sum -c` against `audio/SHA256SUMS` (adjust paths).
+
+Microphone check (as `hypr`; play the tone in a second shell while recording):
+
+```bash
+wpctl status          # Sources: "* Built-in Audio Internal microphone"
+pw-record --rate 48000 --channels 2 --format s16 /tmp/mic.wav &
+sleep 1; pw-play /opt/omarchy-tablet/audio/tone-440-m30dBFS-L-R-LR.wav; sleep 1; kill %1
+# while recording, as root: /proc/asound/card0/pcm9c/sub0/hw_params shows S16_LE, 2 ch, 48000
+```
+
+Listen to `/tmp/mic.wav` or measure it: the 440 Hz tone must come out at
+440 Hz. If it is an octave high, the S16LE rule for the source is missing.
 
 ## The fixes, in order, and why each was needed
 
@@ -272,6 +285,31 @@ permissions, card, PipeWire and mixer state. Compare installed files with
 The speaker became audible only once 4 and 5 were both in place after a
 normal reboot; earlier "successful" tone runs were silent and are not
 counted as speaker successes.
+
+### Microphone, 2026-10-30
+
+1. **EINVAL was a missing route, not bad parameters.** `hw:0,9` accepts
+   S16LE/48 kHz/2 ch as soon as the uplink route is connected (`ADDA_UL_Mux`
+   MTKAIF, `PGA L/R Mux` AIN0, `ADC L/R Mux` Left/Right Preamplifier,
+   `UL1_CH1 ADDA_UL_CH1` and `UL1_CH2 ADDA_UL_CH2` on), the same pattern as
+   the playback EINVAL with the routes off. ACP probes the PCM before any UCM
+   device is enabled, so the route sits in the `HiFi` verb's EnableSequence.
+   Routes only connect DAPM paths; nothing powers up until a PCM opens
+   (DAPM showed `MIC_BIAS`, `AIN0`, `PGA L`, `ADC L` on only while recording).
+2. **Which input is the mic.** With a 440 Hz tone on the speaker, AIN0
+   (vendor `builtin_Mic_Mic1`) picked it up 100-150x above its quiet level;
+   AIN2 (`mic2`) stayed at the -87 dBFS electrical floor. `Mic Type Mux` ACC
+   and DCC measured the same. `PGA1/PGA2 Volume` 4 (the maximum, 24 dB) is
+   used because the level is still low.
+3. **S32 doubles the pitch.** PipeWire first opened the PCM as S32_LE; the
+   tone came out at 880 Hz and the file held half the frames. The capture
+   DMA delivers 16-bit samples regardless, so `51-tablet-speaker.conf` forces
+   `audio.format = "S16LE"` on `alsa_input.platform-soc_sound.HiFi__Mic__source`,
+   as it already did for the speaker sink.
+
+Nothing in this step writes PMIC registers, VOW/speech controls or
+`PMIC_REG_CLEAR`. Direct `arecord` captures did not trigger the watchdog
+reset that raw playback drain does.
 
 ## Pitfalls and lessons
 
@@ -435,15 +473,11 @@ watchdog reboot for `drain`.
 
 ## Open work
 
-- **Microphone.** `hw:0,9` (`Capture_1`, UL1) rejects hw_params with EINVAL
-  under ACP's probe (S16LE, 48 kHz, 2 ch, 1200/4800 frames). Find working
-  parameters with `arecord -D hw:0,9 --dump-hw-params` first, then add a
-  *separate* capture device or verb so it cannot hide the speaker profile
-  again. Unvalidated vendor-derived sequence for the built-in mic
-  (`builtin_Mic_Mic1`): `ADDA_UL_Mux = MTKAIF`, `PGA L/R Mux = AIN0`,
-  `ADC L/R Mux = Left/Right Preamplifier`, `UL1_CH1 ADDA_UL_CH1` and
-  `UL1_CH2 ADDA_UL_CH2` on; `Mic Type Mux` and PGA gains are not set by the
-  vendor file and are guesses. Headset mic uses AIN1.
+- **Microphone tuning.** Works (see "Microphone, 2026-10-30"), but
+  only a tone test was measured; check it with a real voice call or
+  recording. `Mic Type Mux = ACC` is a guess (ACC and DCC measured the same).
+  There is no digital capture gain control in this path; use PipeWire's
+  source volume. Headset mic (AIN1, `DCC_ECM_SINGLE`) is untested.
 - **Headphones / jack.** Vendor `headphone_output`: `DAC In Mux = Normal Path`,
   `HPL/HPR Mux = Audio Playback`, gain `Headset Volume` (the same control the
   speaker uses, so the fixed speaker gain and the headphone gain interact).

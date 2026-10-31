@@ -2,7 +2,7 @@
 
 Native Arch Linux ARM + [Omarchy](https://github.com/basecamp/omarchy) (Hyprland) as the only
 operating system on an Alldocube iPlay 50 mini Pro tablet, with Wi-Fi, speaker audio, touch,
-auto-rotation, an on-screen keyboard, a GPU-composited desktop, hardware H264 video in
+auto-rotation, an on-screen keyboard with key-press vibration, the microphone, GPS (through gpsd), a GPU-composited desktop, hardware H264 video in
 Chromium, and a touch-first "Home & Dock" shell. Work done 2026-10-27 to 2026-10-30.
 
 ![Home & Dock shell](shell-plugin/screenshots/home-dock.png)
@@ -34,11 +34,11 @@ The "Under this port" column was read from the project's unit while it ran Linux
 | Wi-Fi | Dual-band | 2.4 + 5 GHz, 802.11ac (VHT, 867 Mbps max link rate); WPA2 works ([05](docs/05-wifi-bluetooth.md)) |
 | Bluetooth | 5.2 | Radio powers on; pairing **unverified** ([05](docs/05-wifi-bluetooth.md)) |
 | Cellular | 4G LTE, VoLTE, dual SIM (or SIM + microSD) | Modem drivers load; not investigated |
-| GPS | GPS + BeiDou | Not investigated |
-| Audio | (not listed) | MT6366 codec: speakers work; built-in microphone not working; 3.5 mm jack untested ([07](docs/07-audio.md)) |
+| GPS | GPS + BeiDou | Vendor engine runs, reports 6 constellations, NMEA to `gpsd`; fix not yet verified ([13](docs/13-gps.md)) |
+| Audio | (not listed) | MT6366 codec: speakers and built-in mic work; 3.5 mm jack untested ([07](docs/07-audio.md)) |
 | Sensors | (not listed) | Accelerometer works; no gyroscope registered; light/proximity not investigated ([06](docs/06-sensors.md)) |
-| Cameras | (not on the product page; retailers list 13 MP rear / 5 MP front) | Not investigated |
-| Haptics | Vibration motor | Not investigated |
+| Cameras | (not on the product page; retailers list 13 MP rear / 5 MP front) | Sensors present on I2C (main, sub, autofocus, EEPROM); not usable without Android's camera stack |
+| Haptics | Vibration motor | Works: timed pulses, on-screen keyboard taps ([10](docs/10-touch-ui.md)) |
 | Body | 7.5 mm thick, 307 g, metal | — |
 | Shipped OS | Android 13 | Replaced by Arch Linux ARM + Omarchy; the kernel stays Android GKI 5.10.149 |
 
@@ -67,15 +67,34 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
 | Wi-Fi (WPA2) | Works; WPA3/SAE fails; `iwd` unusable (no AF_ALG) | [05](docs/05-wifi-bluetooth.md) |
 | Bluetooth | Radio powers on; `hci0`/pairing/audio **unverified** | [05](docs/05-wifi-bluetooth.md) |
 | Auto-rotation + touch alignment | Works (accelerometer; no gyroscope) | [06](docs/06-sensors.md) |
-| Speaker audio (PipeWire) | Works; microphone, headset and BT audio not working or unvalidated | [07](docs/07-audio.md) |
+| Speaker and built-in microphone (PipeWire) | Works (mic measured with a test tone, not yet by voice); headset and BT audio unvalidated | [07](docs/07-audio.md) |
 | GPU: Hyprland compositing on Mali-G57 (Zink + PanVK on the vendor kbase) | Works; apps and browser stay on CPU rendering (llvmpipe) | [08](docs/08-gpu.md) |
 | Hardware H264 decoding in Chromium (vendor VCU + V4L2 bridge) | Works up to 1080p30, survives reboot; other codecs not validated; some frame drops | [09](docs/09-video-decoding.md) |
-| On-screen keyboard (tap a field → keys), touch shell, Kid Mode | Works; some items unverified | [10](docs/10-touch-ui.md) |
+| On-screen keyboard (tap a field → keys), key-press vibration, touch shell, Kid Mode | Works; some items unverified | [10](docs/10-touch-ui.md) |
+| GPS (vendor `mnld` in a Bionic chroot → `gpsd`) | Engine runs and streams NMEA to gpsd; **position fix not yet verified** (tested indoors only) | [13](docs/13-gps.md) |
 | Charging, battery % | Works; the percentage runs ~2× fast in the second half (1 % with 2.2 h left); ~11.5 h screen-on runtime | [11](docs/11-power-battery.md) |
 | Suspend | **Untested** | [11](docs/11-power-battery.md) |
 | Responsiveness work and measurement tools | Done, measured | [12](docs/12-performance.md) |
 | Account password, lock screen | **Not done**: no password set, idle lock disabled | [04](docs/04-omarchy.md) |
-| Cameras, modem, fingerprint, light/proximity sensors | Not investigated | — |
+| Cameras | Not working: needs Android's camera service (see "Not done yet") | — |
+| Modem, fingerprint, light/proximity sensors | Not investigated | — |
+
+## Not done yet, and what it would take
+
+- **Cameras.** The sensors (main, sub, autofocus, EEPROM) answer on I2C and the
+  vendor ISP drivers (`imgsensor_isp6s`, `camera_isp`, `camera_dip_isp6s`, ...)
+  are on the tablet, but usable images only come out of MediaTek's camera HAL:
+  `camerahalserver` with over 1,000 vendor libraries, behind Android binder
+  services (hwservicemanager, gralloc, the HIDL camera provider). That needs a
+  Halium/Droidian-style Android container plus a binder client. Not attempted.
+- **GPU rendering for apps and the browser.** Apps stay on CPU rendering
+  ([08](docs/08-gpu.md)). The first blocker for Chromium on Zink/PanVK is a
+  missing native fence file descriptor: PanVK legally reports "already
+  signalled" as -1, Chromium requires an fd, and this kernel has no
+  `CONFIG_SW_SYNC` to make one. A candidate route is a tiny kernel module that
+  hands out already-signalled sync files (`dma_fence_get_stub()` +
+  `sync_file_create()`), used by PanVK in that case. Not attempted; other
+  Chromium paths failed for different reasons recorded in doc 08.
 
 The status tables at the top of each doc are the authoritative, item-by-item list, including
 what was only checked by injected input rather than by hand.
@@ -98,6 +117,7 @@ rollback:
 10. [Touch UI: keyboard, Home & Dock shell, Kid Mode](docs/10-touch-ui.md)
 11. [Power and battery](docs/11-power-battery.md)
 12. [Performance](docs/12-performance.md)
+13. [GPS](docs/13-gps.md)
 
 You need a Linux desktop with `fastboot`, a USB-C cable, about 6 GB of free disk for the kernel
 build, and patience. All work after the first boot happens over SSH on the USB link
@@ -135,6 +155,8 @@ reconstructed from the notes, and which were not re-run after adaptation.
 | `video/` | V4L2 bridge, gl-finish loader, VCU runtime service, Chromium wiring, YouTube H264 extension |
 | `touch-ui/` | wvkbd patch + build, `tablet-ui` helper, bar installer, fcitx drop-in |
 | `shell-plugin/` | The `tablet.touch` Quickshell plugin (Home & Dock, Open apps, Kid Mode), design mock |
+| `haptics/` | Vibration motor udev rule and `tablet-haptic` helper |
+| `gps/` | Property shim, linker config, chroot runner, HAL-protocol bridge to gpsd, units |
 | `power/` | Fuel-gauge handshake, USB input-current ceiling, battery logger and analysis |
 | `perf/` | Touch CPU boost, warm Chromium service, end-to-end latency and browser benchmarks |
 | `tools/` | `tablet` SSH helper, USB-link host setup |

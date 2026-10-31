@@ -1,0 +1,5 @@
+# Vibration motor (regulator_vibrator, LED class "vibrator"): switch it to the
+# "transient" trigger so one write to `activate` gives a timed, non-blocking
+# pulse (state=1: on for `duration`, then off; the default 0 is the reverse,
+# i.e. it would leave the motor running), and let the input group (the desktop user) drive it.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="vibrator", RUN+="/bin/sh -c 'echo transient > /sys%p/trigger && echo 1 > /sys%p/state && chgrp input /sys%p/activate /sys%p/duration /sys%p/state && chmod 0664 /sys%p/activate /sys%p/duration /sys%p/state'"

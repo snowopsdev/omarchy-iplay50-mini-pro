@@ -1,0 +1,14 @@
+[Unit]
+Description=Tablet GPS: NMEA bridge (/run/tablet-gps/nmea); GPS runs while this runs
+Requires=tablet-gps-mnld.service
+After=tablet-gps-mnld.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 3
+ExecStart=/opt/omarchy-tablet/gps/tablet-gnss-bridge.py
+# Hand the NMEA pty to gpsd (started on demand by gpsdctl/socket activation).
+ExecStartPost=-/bin/sh -c 'for i in $(seq 20); do [ -e /run/tablet-gps/nmea ] && break; sleep 0.25; done; /usr/bin/gpsdctl add /run/tablet-gps/nmea'
+ExecStopPost=-/usr/bin/gpsdctl remove /run/tablet-gps/nmea
+Restart=on-failure
+RestartSec=5
