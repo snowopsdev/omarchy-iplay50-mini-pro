@@ -13,6 +13,35 @@ Chromium, and a touch-first "Home & Dock" shell. Work done 2026-10-27 to 2026-10
 > Alldocube, MediaTek, Google or the Omarchy project. Read
 > [docs/01](docs/01-device-and-backups.md) (brick risks) completely before flashing anything.
 
+## The tablet
+
+The "Vendor spec" column comes from the [Alldocube product page](https://www.alldocube.com/en/products/iplay50minipro/).
+The "Under this port" column was read from the project's unit while it ran Linux.
+
+| | Vendor spec | Under this port |
+|---|---|---|
+| Model | iPlay 50 mini Pro (T811M, box CUL8JN) | Vendor build props: `ALLDOCUBE` / `Zhangwanmini`; lk product `tb8781p1_64` |
+| SoC | MediaTek Helio G99 (MT8781, the tablet version of MT6789), 6 nm | Same |
+| CPU | 2× Cortex-A76 + 6× Cortex-A55 | A76 cores (6–7) up to 2.2 GHz; A55 cores (0–5) up to 2.0 GHz |
+| GPU | Arm Mali-G57 MC2 | `Mali-G57 2 cores r0p1`. Compositing via Zink + PanVK; apps render on the CPU ([08](docs/08-gpu.md)) |
+| RAM | 8 GB (plus 8 GB "virtual RAM", Android swap) | 7.2 GiB usable |
+| Storage | 256 GB, microSD up to 512 GB | UFS 3.1, 256 GB; ~228 GiB `userdata` is the Linux root. microSD **not tested** |
+| Display | 8.4" in-cell IPS, 1200×1920 | Panel is natively portrait (1200×1920 on DSI-1); rotation via the accelerometer ([06](docs/06-sensors.md)) |
+| Touch | (not listed) | `mtk-tpd`, works |
+| Battery | 3.8 V / 5000 mAh Li-ion | Capacity from the gauge is unreliable ([11](docs/11-power-battery.md)); ~11.5 h screen-on runtime measured |
+| Charging | 18 W PD fast charge, USB-C | Charges; only 5 V (~10 W max) was observed, on one wall charger ([11](docs/11-power-battery.md)) |
+| USB | USB-C | USB 2.0 high-speed gadget (NCM network link for SSH) |
+| Wi-Fi | Dual-band | 2.4 + 5 GHz, 802.11ac (VHT, 867 Mbps max link rate); WPA2 works ([05](docs/05-wifi-bluetooth.md)) |
+| Bluetooth | 5.2 | Radio powers on; pairing **unverified** ([05](docs/05-wifi-bluetooth.md)) |
+| Cellular | 4G LTE, VoLTE, dual SIM (or SIM + microSD) | Modem drivers load; not investigated |
+| GPS | GPS + BeiDou | Not investigated |
+| Audio | (not listed) | MT6366 codec: speakers work; built-in microphone not working; 3.5 mm jack untested ([07](docs/07-audio.md)) |
+| Sensors | (not listed) | Accelerometer works; no gyroscope registered; light/proximity not investigated ([06](docs/06-sensors.md)) |
+| Cameras | (not on the product page; retailers list 13 MP rear / 5 MP front) | Not investigated |
+| Haptics | Vibration motor | Not investigated |
+| Body | 7.5 mm thick, 307 g, metal | — |
+| Shipped OS | Android 13 | Replaced by Arch Linux ARM + Omarchy; the kernel stays Android GKI 5.10.149 |
+
 ## Approach
 
 Mainline Linux has no support for this SoC's Wi-Fi/Bluetooth (MT6631 connsys), audio or power

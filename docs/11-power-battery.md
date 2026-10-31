@@ -174,7 +174,7 @@ figure. Validated only with synthetic data (1000 mAh over 30 % → 3333 mAh).
 
 Method (planned 2026-10-29): wall charger to 100 % → unplugged normal use on Wi-Fi down to
 ~15 % (no forced deep discharge) → full recharge. Compare the implied capacity with the
-gauge's 2946 mAh and the ~4000 mAh retail rating before deciding on any metadata
+gauge's 2946 mAh and the 5000 mAh rating (3.8 V, vendor spec) before deciding on any metadata
 correction.
 
 **Result, 2026-10-30.** Unplugged from 95 % (4.29 V) at 21:02, screen on all night at
@@ -187,9 +187,12 @@ real, because the gauge's current reading is too high:
   12.6–13.5 W, while the screen was also on. That is physically impossible, so the gauge
   overstates current by at least ~1.4× (≥ 13.5 W / ~9.8 W), and by ~1.6–1.8× once charger
   efficiency (~0.9) and ~1–2 W of system load are allowed for.
-- Corrected, the usable capacity is roughly **3300–4000 mAh**, consistent with the ~4000 mAh
-  retail rating; the gauge's own 2946 mAh header default is too small. An external USB-C
-  power meter would pin the factor down; none was used.
+- Corrected by that factor, the usable capacity comes out at roughly **3300–4000 mAh**, below
+  the vendor's 5000 mAh rating. Either the battery has lost capacity, or the overstatement is
+  smaller than estimated (for example, if the charger delivered more than the 2.05 A input
+  limit suggests). The data cannot tell these apart. The gauge's own 2946 mAh header default
+  is too small either way. An external USB-C power meter would pin the factor down; none was
+  used.
 
 What users see: the percentage drops roughly twice as fast as the charge in the second half.
 
