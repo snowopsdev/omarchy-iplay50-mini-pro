@@ -78,7 +78,7 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
 | Charging, battery % | Works; the percentage runs ~2× fast in the second half (1 % with 2.2 h left); ~11.5 h screen-on runtime | [11](docs/11-power-battery.md) |
 | Suspend | **Untested** | [11](docs/11-power-battery.md) |
 | Responsiveness work and measurement tools | Done, measured | [12](docs/12-performance.md) |
-| Account password, lock screen | **Not done**: no password set, idle lock disabled | [04](docs/04-omarchy.md) |
+| Account password, lock screen | Works: password set; touch lock screen with a short PIN, power key screen off/on, idle lock after 5 min | [04](docs/04-omarchy.md), [10](docs/10-touch-ui.md#lock-screen) |
 | Cameras | Not working: needs Android's camera service (see "Not done yet") | — |
 | Modem, fingerprint, light/proximity sensors | Not investigated | — |
 

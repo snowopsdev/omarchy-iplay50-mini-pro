@@ -591,28 +591,63 @@ Item {
         color: root.bg
       }
 
-      // Switch into Kid Mode (first use asks for a parent PIN and apps).
-      Tap {
+      Row {
         z: 2
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 24
-        width: kidLabel.implicitWidth + 64
-        height: 56
-        baseColor: root.surface
-        onActivated: kids.start()
-        Row {
-          anchors.centerIn: parent
-          spacing: 10
-          Glyph { code: 0xF04CE; font.pixelSize: 22; color: "#ffd166"; anchors.verticalCenter: parent.verticalCenter }
-          Text {
-            id: kidLabel
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Kid Mode"
-            color: root.fg
-            font.family: root.fontFamily
-            font.pixelSize: 17
-            font.weight: Font.DemiBold
+        spacing: 12
+
+        // Lock PIN settings (tablet.lock plugin): set, change or remove it.
+        Tap {
+          width: 56
+          height: 56
+          baseColor: root.surface
+          onActivated: root.run(["omarchy-shell", "tabletLock", "setup"])
+          Glyph { anchors.centerIn: parent; code: 0xF0306; font.pixelSize: 24 }
+        }
+
+        // Lock now (without a PIN yet, this opens PIN setup instead).
+        Tap {
+          width: lockLabel.implicitWidth + 64
+          height: 56
+          baseColor: root.surface
+          onActivated: root.run(["omarchy-shell", "tabletLock", "lockNow"])
+          Row {
+            anchors.centerIn: parent
+            spacing: 10
+            Glyph { code: 0xF033E; font.pixelSize: 22; anchors.verticalCenter: parent.verticalCenter }
+            Text {
+              id: lockLabel
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Lock"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: 17
+              font.weight: Font.DemiBold
+            }
+          }
+        }
+
+        // Switch into Kid Mode (first use asks for a parent PIN and apps).
+        Tap {
+          width: kidLabel.implicitWidth + 64
+          height: 56
+          baseColor: root.surface
+          onActivated: kids.start()
+          Row {
+            anchors.centerIn: parent
+            spacing: 10
+            Glyph { code: 0xF04CE; font.pixelSize: 22; color: "#ffd166"; anchors.verticalCenter: parent.verticalCenter }
+            Text {
+              id: kidLabel
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Kid Mode"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: 17
+              font.weight: Font.DemiBold
+            }
           }
         }
       }

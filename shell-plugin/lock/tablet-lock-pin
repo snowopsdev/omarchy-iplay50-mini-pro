@@ -1,0 +1,133 @@
+#!/usr/bin/python3
+"""Screen-lock PIN store for the tablet lock screen (tablet.lock plugin).
+
+usage: tablet-lock-pin status          -> {"pin": bool, "length": N, "wait": S}
+       tablet-lock-pin check           PIN on stdin; exit 0 right, 1 wrong, 3 must wait
+       tablet-lock-pin set             current PIN (empty line if none), new PIN on stdin
+       tablet-lock-pin clear           current PIN on stdin; removes the PIN
+       tablet-lock-pin reset USER      root only: forget USER's PIN and failed tries
+
+PINs are 4-8 digits, stored as an scrypt hash in ~/.config/omarchy/tablet-lock.json
+(mode 0600). Wrong tries are counted in ~/.local/state/tablet-touch/lock-tries.json:
+after 5 in a row each further try waits 30 s, doubling to 15 min. The count
+survives shell restarts. A 4-8 digit PIN cannot resist an offline guess at
+the hash file; it keeps out someone holding the tablet, who only has the
+rate-limited lock screen. Every reply is one JSON line on stdout."""
+import hashlib, hmac, json, os, pwd, sys, time
+
+FREE_TRIES = 5
+FIRST_WAIT, MAX_WAIT = 30, 900
+N, R, P = 2 ** 14, 8, 1        # ~65 ms on the tablet's A76 cores
+
+
+def paths(home):
+    return (os.path.join(home, ".config/omarchy/tablet-lock.json"),
+            os.path.join(home, ".local/state/tablet-touch/lock-tries.json"))
+
+
+PIN_FILE, TRIES_FILE = paths(os.path.expanduser("~"))
+
+
+def load(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def store(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".next"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def reply(code, **fields):
+    print(json.dumps(fields))
+    sys.exit(code)
+
+
+def digest(pin, salt, n=N, r=R, p=P):
+    return hashlib.scrypt(pin.encode(), salt=bytes.fromhex(salt), n=n, r=r, p=p).hex()
+
+
+def valid(pin):
+    return pin.isdigit() and 4 <= len(pin) <= 8
+
+
+def wait_left(tries):
+    return max(0, int(tries.get("until", 0) - time.time() + 0.999))
+
+
+def matches(pin):
+    rec = load(PIN_FILE, None)
+    if not rec:
+        return False
+    return hmac.compare_digest(digest(pin, rec["salt"], rec["n"], rec["r"], rec["p"]), rec["hash"])
+
+
+def verify(pin):
+    """Check a PIN against the store, counting and rate-limiting wrong tries."""
+    tries = load(TRIES_FILE, {})
+    left = wait_left(tries)
+    if left:
+        reply(3, result="wait", wait=left)
+    if matches(pin):
+        if tries:
+            store(TRIES_FILE, {})
+        return
+    failures = tries.get("failures", 0) + 1
+    wait = 0
+    if failures >= FREE_TRIES:
+        wait = min(MAX_WAIT, FIRST_WAIT * 2 ** (failures - FREE_TRIES))
+    store(TRIES_FILE, {"failures": failures, "until": time.time() + wait})
+    reply(1, result="wrong", failures=failures, wait=wait)
+
+
+def line():
+    return sys.stdin.readline().strip()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "status":
+        rec = load(PIN_FILE, None)
+        reply(0, pin=bool(rec), length=rec["length"] if rec else 0,
+              wait=wait_left(load(TRIES_FILE, {})))
+    if cmd == "check":
+        if not load(PIN_FILE, None):
+            reply(1, result="no-pin")
+        verify(line())
+        reply(0, result="ok")
+    if cmd == "set":
+        current, new = line(), line()
+        if load(PIN_FILE, None):
+            verify(current)
+        if not valid(new):
+            reply(2, result="invalid")
+        salt = os.urandom(16).hex()
+        store(PIN_FILE, {"version": 1, "length": len(new), "salt": salt,
+                         "n": N, "r": R, "p": P, "hash": digest(new, salt)})
+        reply(0, result="ok")
+    if cmd == "clear":
+        if load(PIN_FILE, None):
+            verify(line())
+            os.remove(PIN_FILE)
+        reply(0, result="ok")
+    if cmd == "reset" and len(sys.argv) == 3:
+        if os.geteuid() != 0:
+            reply(2, result="root-only")
+        for path in paths(pwd.getpwnam(sys.argv[2]).pw_dir):
+            if os.path.exists(path):
+                os.remove(path)
+        reply(0, result="ok")
+    print(__doc__, file=sys.stderr)
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

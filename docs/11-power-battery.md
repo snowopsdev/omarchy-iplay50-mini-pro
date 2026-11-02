@@ -244,16 +244,20 @@ the charger said `Full` with zero charge current while the battery supplied
 - Long-held kernel wake sources were seen: `ultra wakelock`, `USB suspend lock`,
   `disp_crtc0_wakelock`, `cmdq_0_pm_lock`. Display/audio/USB ordering needs a
   coordinated test. Never force-release wake locks to hide blockers.
-- **Lock trap:** Omarchy's `omarchy-sleep-lock.service` (user manager) takes a delay
-  inhibitor and locks the shell on `PrepareForSleep` regardless of idle-lock settings.
-  With `hypr`'s password locked and touch unlock unvalidated, a suspend could strand the
-  session behind a lock screen.
+- **Lock trap (resolved 2026-11-02):** Omarchy's `omarchy-sleep-lock.service` (user
+  manager) takes a delay inhibitor and locks the shell on `PrepareForSleep` regardless of
+  idle-lock settings. With only Omarchy's password lock this could strand the session.
+  The tablet's PIN lock screen now answers that `lock` IPC and unlocks by touch
+  ([10-touch-ui.md](10-touch-ui.md#lock-screen)); its `status` reports `secure` the way the
+  sleep hook waits for. Without a PIN it refuses to lock, and the hook then suspends
+  unlocked with a notification. Suspend itself is still untested.
 - Proposed guard, not installed: copy `power/staged/omarchy-sleep-disabled.conf` to
   `/etc/systemd/sleep.conf.d/` (disables all four sleep modes) and mask
   `omarchy-sleep-lock.service` for `hypr`. Installed Omarchy 4.0.6 does **not** detect
   this file to hide its menu entries (upstream source does). On 2026-10-28 the power key
-  was ignored by a bring-up drop-in; by 2026-10-29 the notes record that the physical
-  power button opens Omarchy's power menu (shutdown/restart only).
+  was ignored by a bring-up drop-in (logind still ignores it); by 2026-10-29 it opened
+  Omarchy's power menu through Hyprland; since 2026-11-02 Hyprland runs
+  `tablet-power-key` instead (lock and screen off / screen on).
 - Recorded plan for a supervised test: physical access and power-key/RTC recovery ready;
   stop playback; DPMS off through Hyprland; check which wake locks release; set and verify
   an RTC alarm; re-enable sleep only for the test; request s2idle; then check RTC/power-key

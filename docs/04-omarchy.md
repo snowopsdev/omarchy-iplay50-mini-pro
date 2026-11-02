@@ -24,8 +24,8 @@ repository, and Hyprland `0.56.2-4` from Arch Linux ARM (Hyprland commit
 | `pacman -Qkk omarchy` (packaged files untouched) | 1769 files, 0 altered |
 | No failed system/user units, empty `hyprctl configerrors` after reboot | Observed on 2026-10-28 |
 | Typing and opening Apps/Term usable (software rendering profile) | Physically confirmed |
-| Account password, touch unlock | **Not done.** No password is set (see "Account and sudo state") |
-| Automatic idle lock | **Disabled on purpose** |
+| Account password | Set 2026-10-30 (`sudo` works) |
+| Lock screen with touch unlock | Works since 2026-11-02: short PIN, power key, idle lock after 5 min ([docs/10](10-touch-ui.md#lock-screen)) |
 | Native menu search + launch by physical touch | Pending at the time of the notes (injected input passed; not counted as physical proof) |
 | Suspend | Untested ([docs/11](11-power-battery.md)) |
 
@@ -274,11 +274,13 @@ results, not these exact command lines.
 - **No password is set for `hypr`.** A password request to the user expired without an
   entry, and none was invented. In practice `sudo` is unusable for `hypr` until root sets a
   password (root access is the SSH key over the USB link).
-- **Automatic idle locking is disabled**. `setup-user.py` writes
-  `"idle": {"screensaver": 0, "lock": 0}` into `shell.json` so that a lock screen nobody can
-  unlock never starts. Anyone holding the tablet has an unlocked session. Password setup and
-  touch unlock are unfinished. Do not enable suspend-on-idle or a lock button until both are
-  tested ([docs/11](11-power-battery.md)).
+- **Idle lock**: `setup-user.py` writes `"idle": {"screensaver": 0, "lock": 0}` into
+  `shell.json` so that Omarchy's password lock screen, which cannot be used by touch, never
+  starts. Since 2026-11-02 the tablet has its own PIN lock screen and
+  `shell-plugin/deploy-lock.sh` sets `idle.lock` to 300 s ([docs/10](10-touch-ui.md#lock-screen)).
+  Until a PIN is set, nothing locks.
+- **Password**: on 2026-10-30 a password was set for `hypr` (entered by the owner, applied
+  with `chpasswd` over the USB SSH link), so `sudo` works. The lock screen does not use it.
 
 ## The user overrides and why each exists
 
