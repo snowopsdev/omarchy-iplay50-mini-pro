@@ -1,0 +1,276 @@
+Experimental, not applied by fetch-panvk-source.sh (2026-11-02).
+
+kbase import cache for the apps PanVK build: freed external dma-buf imports are
+parked for up to 2 s and revived when the same dma-buf (inode + import flags)
+is imported again. Chromium re-creates an EGLImage (Zink -> PanVK import) for
+every decoded video frame; with this patch 98 % of those imports hit the cache
+and the GPU process main thread drops from ~45 % to ~39 % of a core during
+1080p60, but frame drops did not change (~14 %): the 60 fps limit is the
+Wayland present loop, see docs/09-video-decoding.md. PANVK_KBASE_IMPORT_CACHE=0
+disables it, =stats prints hit/miss counters to stderr.
+
+--- src/panfrost/lib/kmod/kbase_kmod.c	2026-11-02 14:01:19.012810023 -0500
++++ src/panfrost/lib/kmod/kbase_kmod.c	2026-11-02 14:24:42.885963764 -0500
+@@ -44,6 +44,7 @@
+ #include <sys/ioctl.h>
+ #include <poll.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include "util/macros.h"
+@@ -162,6 +163,10 @@
+    /* Whether this is a SAME_VA region (freed by munmap()) or a zone
+     * region (freed by KBASE_IOCTL_MEM_FREE). */
+    bool same_va;
++
++   /* PATCH import cache: flags given to pan_kmod_bo_init() at import
++    * (bo->flags may change later), the key for reviving a parked import. */
++   uint32_t import_flags;
+ };
+ 
+ bool
+@@ -1345,6 +1350,7 @@
+ }
+ 
+ static void kbase_quar_reap(int fd, bool all);
++static void kbase_park_reap(int fd);
+ 
+ static void
+ kbase_kmod_dev_destroy(struct pan_kmod_dev *dev)
+@@ -1353,6 +1359,7 @@
+       container_of(dev, struct kbase_kmod_dev, base);
+ 
+    kbase_quar_reap(dev->fd, true);
++   kbase_park_reap(dev->fd);
+ 
+    simple_mtx_lock(&kbase_dev->kcpu.lock);
+    if (kbase_dev->kcpu.fence_fd >= 0)
+@@ -1450,6 +1457,151 @@
+    return flags;
+ }
+ 
++/* PATCH: import cache. Chromium creates a new EGLImage (Zink -> PanVK
++ * import) for every decoded video frame although the frames cycle through a
++ * small pool of dma-bufs. Every kbase import costs a MEM_IMPORT ioctl, two
++ * mmaps, a clean+invalidate of the whole buffer and GPU page-table updates:
++ * ~3 imports per 1080p frame, about a third of Chromium's GPU main thread at
++ * 60 fps. Freed external imports are therefore parked for a short time and
++ * revived when the same dma-buf (same inode, same flags) is imported again,
++ * as DRM drivers do by handle. A parked BO keeps its dma-buf reference, so
++ * the inode cannot be reused by another buffer meanwhile. Content written
++ * later by the CPU is covered by the exporter's DMA_BUF_IOCTL_SYNC, as for
++ * any long-lived import. PANVK_KBASE_IMPORT_CACHE=0 disables it. */
++#define KBASE_PARK_MAX    96
++#define KBASE_PARK_AGE_NS (2000ull * 1000000ull)
++
++struct kbase_parked_bo {
++   struct list_head link;
++   int fd;
++   dev_t st_dev;
++   ino_t st_ino;
++   uint32_t flags;
++   uint64_t size, gpu_va, parked_ns;
++   void *cpu_ptr, *gpu_mapping;
++   bool same_va, owns_cpu_mapping;
++   int dmabuf_fd;
++};
++
++static simple_mtx_t kbase_park_lock = SIMPLE_MTX_INITIALIZER;
++static struct list_head kbase_park_list = {&kbase_park_list, &kbase_park_list};
++static int kbase_park_mode = -1;
++static struct {
++   unsigned hit, miss, miss_dev, miss_flags, parked, evict_age, evict_max;
++} kbase_park_stats;
++
++static void
++kbase_park_report(void)
++{
++   if (kbase_park_mode != 2 || (kbase_park_stats.hit + kbase_park_stats.miss) % 600)
++      return;
++   fprintf(stderr,
++           "panvk import cache pid %d: hit %u miss %u (same inode: other dev %u, "
++           "other flags %u) parked %u evicted age %u max %u\n",
++           getpid(), kbase_park_stats.hit, kbase_park_stats.miss,
++           kbase_park_stats.miss_dev, kbase_park_stats.miss_flags,
++           kbase_park_stats.parked, kbase_park_stats.evict_age,
++           kbase_park_stats.evict_max);
++}
++
++static bool
++kbase_park_enabled(void)
++{
++   if (kbase_park_mode < 0) {
++      const char *v = getenv("PANVK_KBASE_IMPORT_CACHE");
++      kbase_park_mode = v && !strcmp(v, "0") ? 0 : v && !strcmp(v, "stats") ? 2 : 1;
++   }
++   return kbase_park_mode >= 1;
++}
++
++static void
++kbase_park_release(struct kbase_parked_bo *p)
++{
++   if (p->owns_cpu_mapping && p->cpu_ptr && p->cpu_ptr != p->gpu_mapping)
++      munmap(p->cpu_ptr, p->size);
++   if (p->gpu_mapping)
++      munmap(p->gpu_mapping, p->size);
++   if (!p->same_va) {
++      struct kbase_ioctl_mem_free req = { .gpu_addr = p->gpu_va };
++      ioctl(p->fd, KBASE_IOCTL_MEM_FREE, &req);
++   }
++   if (p->dmabuf_fd >= 0)
++      close(p->dmabuf_fd);
++   free(p);
++}
++
++/* Releases parked BOs that are too old or over the limit, or (fd >= 0) all
++ * of that kbase fd's before it is closed. The list is newest first. */
++static void
++kbase_park_reap(int fd)
++{
++   uint64_t now = os_time_get_nano();
++   unsigned kept = 0;
++   struct list_head done;
++   list_inithead(&done);
++
++   simple_mtx_lock(&kbase_park_lock);
++   list_for_each_entry_safe(struct kbase_parked_bo, p, &kbase_park_list,
++                            link) {
++      bool drop = fd >= 0 ? p->fd == fd
++                          : now - p->parked_ns >= KBASE_PARK_AGE_NS ||
++                               kept >= KBASE_PARK_MAX;
++      if (drop) {
++         if (fd < 0) {
++            if (now - p->parked_ns >= KBASE_PARK_AGE_NS)
++               kbase_park_stats.evict_age++;
++            else
++               kbase_park_stats.evict_max++;
++         }
++         list_del(&p->link);
++         list_addtail(&p->link, &done);
++      } else {
++         kept++;
++      }
++   }
++   simple_mtx_unlock(&kbase_park_lock);
++
++   list_for_each_entry_safe(struct kbase_parked_bo, p, &done, link)
++      kbase_park_release(p);
++}
++
++static struct kbase_parked_bo *
++kbase_park_take(int dev_fd, int dmabuf_fd, uint32_t flags)
++{
++   struct stat st;
++   struct kbase_parked_bo *hit = NULL;
++
++   if (fstat(dmabuf_fd, &st))
++      return NULL;
++
++   simple_mtx_lock(&kbase_park_lock);
++   list_for_each_entry(struct kbase_parked_bo, p, &kbase_park_list, link) {
++      if (p->fd == dev_fd && p->st_ino == st.st_ino &&
++          p->st_dev == st.st_dev && p->flags == flags) {
++         list_del(&p->link);
++         hit = p;
++         break;
++      }
++   }
++   if (hit) {
++      kbase_park_stats.hit++;
++   } else {
++      kbase_park_stats.miss++;
++      list_for_each_entry(struct kbase_parked_bo, p, &kbase_park_list, link) {
++         if (p->st_ino == st.st_ino && p->st_dev == st.st_dev) {
++            if (p->fd != dev_fd)
++               kbase_park_stats.miss_dev++;
++            else
++               kbase_park_stats.miss_flags++;
++            break;
++         }
++      }
++   }
++   kbase_park_report();
++   simple_mtx_unlock(&kbase_park_lock);
++   return hit;
++}
++
+ static struct pan_kmod_bo *
+ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
+                          struct pan_kmod_vm *exclusive_vm, int fd,
+@@ -1459,6 +1611,32 @@
+    struct kbase_kmod_dev *kbase_dev =
+       container_of(dev, struct kbase_kmod_dev, base);
+    const uint64_t page_size = 4096;
++
++   if (external_import && kbase_park_enabled()) {
++      kbase_park_reap(-1);
++      struct kbase_parked_bo *p = kbase_park_take(
++         dev->fd, fd, kmod_flags | PAN_KMOD_BO_FLAG_IMPORTED);
++      if (p) {
++         struct kbase_kmod_bo *kbo = pan_kmod_dev_alloc(dev, sizeof(*kbo));
++         if (!kbo) {
++            kbase_park_release(p);
++            return NULL;
++         }
++         kbo->dmabuf_fd = p->dmabuf_fd;
++         kbo->gpu_mapping = p->gpu_mapping;
++         kbo->cpu_ptr = p->cpu_ptr;
++         kbo->owns_cpu_mapping = p->owns_cpu_mapping;
++         kbo->same_va = p->same_va;
++         kbo->gpu_va = p->gpu_va;
++         uint32_t handle = p_atomic_inc_return(&kbase_dev->next_handle);
++         kbo->import_flags = p->flags;
++         pan_kmod_bo_init(&kbo->base, dev, exclusive_vm, p->size, p->flags,
++                          handle);
++         free(p);
++         return &kbo->base;
++      }
++   }
++
+    struct kbase_kmod_bo *kbase_bo =
+       pan_kmod_dev_alloc(dev, sizeof(*kbase_bo));
+    if (!kbase_bo)
+@@ -1528,6 +1706,7 @@
+    uint32_t flags = kmod_flags;
+    if (external_import)
+       flags |= PAN_KMOD_BO_FLAG_IMPORTED;
++   kbase_bo->import_flags = flags;
+ 
+    pan_kmod_bo_init(&kbase_bo->base, dev, exclusive_vm, bo_size, flags,
+                     handle);
+@@ -2032,6 +2211,34 @@
+          return;
+       }
+    }
++
++   if ((bo->flags & PAN_KMOD_BO_FLAG_IMPORTED) && kbase_bo->dmabuf_fd >= 0 &&
++       kbase_park_enabled()) {
++      struct stat st;
++      struct kbase_parked_bo *p =
++         fstat(kbase_bo->dmabuf_fd, &st) ? NULL : calloc(1, sizeof(*p));
++      if (p) {
++         p->fd = bo->dev->fd;
++         p->st_dev = st.st_dev;
++         p->st_ino = st.st_ino;
++         p->flags = kbase_bo->import_flags;
++         p->size = bo->size;
++         p->gpu_va = kbase_bo->gpu_va;
++         p->parked_ns = os_time_get_nano();
++         p->cpu_ptr = kbase_bo->cpu_ptr;
++         p->gpu_mapping = kbase_bo->gpu_mapping;
++         p->same_va = kbase_bo->same_va;
++         p->owns_cpu_mapping = kbase_bo->owns_cpu_mapping;
++         p->dmabuf_fd = kbase_bo->dmabuf_fd;
++         simple_mtx_lock(&kbase_park_lock);
++         list_add(&p->link, &kbase_park_list);
++         kbase_park_stats.parked++;
++         simple_mtx_unlock(&kbase_park_lock);
++         pan_kmod_dev_free(bo->dev, kbase_bo);
++         kbase_park_reap(-1);
++         return;
++      }
++   }
+ 
+    /* For SAME_VA regions, munmap() alone tears the whole region down
+     * (free-on-close); a MEM_FREE afterwards would hit a stale VA.  For

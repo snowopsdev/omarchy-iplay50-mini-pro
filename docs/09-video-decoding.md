@@ -24,7 +24,7 @@ Sources: [`video/`](../video/README.md). Work dates: 2026-10-28 to 2026-10-29.
 | Post-reboot YouTube 1080p | Works, drops frames | 150 s uninterrupted main content: 4505 frames / 755 dropped (~16.8 %) |
 | Browser presentation | GPU since 2026-10-31 | Local 1080p30 clip: 3-6 % frames dropped on the GPU vs 10-17 % on llvmpipe; 4-minute soak 3.8-6.2 %, no reset (see [08-gpu.md](08-gpu.md)). The YouTube numbers above were taken on llvmpipe |
 | YouTube 1080p30 on the GPU, NV12 view (2026-11-02) | **Works, ~2 % dropped** | 90 s (45 s windowed + 45 s fullscreen): 22/1349 and 25/1350 dropped. The GPU launcher's earlier BGR4 view dropped ~23 % (104/450, 98/449), which the user saw as stutter. Same frame captured in both modes: PSNR 49 dB |
-| YouTube 1080p60 on the GPU, NV12 view | Drops ~14 % | 15 s each: 122/899 windowed, 132/900 fullscreen. Not investigated further |
+| YouTube 1080p60 on the GPU, NV12 view | Drops ~14 % (open) | 15 s each: 122/899 windowed, 132/900 fullscreen; 720p60 drops as much. Not decode-bound (the decoder returns 60.5 frames/s) and not GPU-bound (fragment slot ~43 % busy): Chromium's Wayland present loop is. See Pitfalls |
 | VP8 / VP9 / AV1 / HEVC | **Not validated** | The driver advertises more codecs; only H264 was ever decoded. The YouTube extension hides VP8/VP9/AV1 |
 | Protected (secure) playback | Not supported | Secure decode paths are never used |
 | HDR, 10-bit, 1080p60, 4K | Unverified | HDR/unknown colour metadata falls back to NV12; nothing beyond 1080p30 was measured |
@@ -349,7 +349,23 @@ found two causes:
 
 ## Pitfalls and lessons
 
-- **Arch Linux ARM's libyuv has no NEON code.** It reports NEON but runs the C
+- **60 fps video is limited by Chromium's Wayland present loop (2026-11-02).**
+  Every 60 fps video drops ~10-15 % of frames, at 720p as at 1080p, so it is
+  not pixel throughput. Measured during 1080p60: V4L2 tracepoints show the
+  decoder returning 60.5 frames/s with buffers back in 2-5 ms; the Mali fragment
+  slot is ~43 % busy; Hyprland flips whenever a new buffer is there. Chromium
+  only commits ~52 frames/s: a Chromium trace shows each frame taking ~48 ms
+  (median) from draw to presentation feedback, with at most 2 swaps pending
+  ("Swap throttled"), because the GPU process waits on the CPU for its GPU fence
+  (~8 ms) before the browser may commit (no explicit sync: the MediaTek DRM driver
+  has no syncobj support, `DRM_CAP_SYNCOBJ` = 0), then for Hyprland's frame
+  callback. Tried without effect: a PanVK import cache that removes Chromium's
+  per-frame re-import of the video dma-buf (98 % hits, ~6 % less GPU-process CPU;
+  `graphics/panvk/patches/experimental/`), `--enable-hardware-overlays` (the
+  video was never promoted to a subsurface), `--disable-gpu-vsync`, pinning to
+  big cores. Real fixes would need explicit sync (kernel syncobj support plus real
+  GPU fences from PanVK) or more pending swaps; neither is a setting.
+ It reports NEON but runs the C
   rows: `NV12ToARGB` at 1920x1088 takes 11.2 ms on a Cortex-A76 and 33.7 ms on
   a Cortex-A55, the same with NEON masked off. The BGR4 view (detile + NV12 to
   ARGB per frame) therefore missed the 33 ms frame budget whenever the thread
