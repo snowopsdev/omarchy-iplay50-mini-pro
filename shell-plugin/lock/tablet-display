@@ -1,0 +1,71 @@
+#!/bin/bash
+# Screen off/on for the tablet panel. Usage: tablet-display off|on|sync|status
+# DPMS alone powers the DSI panel down but leaves the MTK PWM backlight lit
+# (a glowing black screen), so "off" also sets the backlight to 0 and "on"
+# restores the saved level. The saved level doubles as the screen-off flag:
+# Hyprland turns DPMS back on by itself at any key press
+# (key_press_enables_dpms), so the DPMS state alone cannot tell whether the
+# screen is meant to be off. Needs write access to the backlight
+# (99-tablet-backlight.rules: group video).
+set -u
+led=/sys/class/leds/lcd-backlight
+saved=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/tablet-backlight
+
+dpms() {
+  local reply
+  reply=$(hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" 2>&1)
+  [[ $reply == ok ]] || logger -t tablet-display "dpms $1: ${reply:-no reply}"
+}
+dpms_all_on() {
+  hyprctl monitors -j 2>/dev/null | jq -e '[.[] | select(.disabled == false)] | length > 0 and all(.dpmsStatus)' >/dev/null 2>&1
+}
+is_off() { [[ -e $saved ]] || ! dpms_all_on; }
+screen_on() {
+  # A redundant DPMS enable forces a modeset that blanks the panel for a beat.
+  dpms_all_on || dpms enable
+  local level
+  level=$(cat "$saved" 2>/dev/null)
+  if ! [[ $level =~ ^[0-9]+$ ]] || (( level == 0 )); then
+    level=$(( $(<"$led/max_brightness") * 40 / 100 ))
+  fi
+  (( $(<"$led/brightness") == 0 )) && echo "$level" > "$led/brightness"
+  rm -f "$saved"
+}
+
+case ${1:-} in
+off)
+  level=$(<"$led/brightness")
+  # Pressed twice: keep the level saved by the first press, not the 0.
+  if (( level > 0 )) || [[ ! -e $saved ]]; then echo "$level" > "$saved"; fi
+  echo 0 > "$led/brightness"
+  dpms disable
+  # Right as a session lock turns secure Hyprland answers "ok" to the DPMS
+  # disable but leaves the panel on, so check and repeat (unless woken).
+  for _ in 1 2 3 4 5 6 7 8; do
+    sleep 0.25
+    [[ -e $saved ]] && dpms_all_on || break
+    dpms disable
+  done
+  ;;
+on)
+  screen_on
+  ;;
+sync)
+  # Run on input while the screen is off. Others turn DPMS back on without
+  # the backlight (Hyprland at a key press, Omarchy's idle wake); give them
+  # 2 s, then finish their wake. Prints the resulting state.
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ -e $saved ]] || { echo on; exit 0; }
+    if dpms_all_on; then screen_on; echo on; exit 0; fi
+    sleep 0.25
+  done
+  echo off
+  ;;
+status)
+  if is_off; then echo off; else echo on; fi
+  ;;
+*)
+  echo "usage: tablet-display off|on|sync|status" >&2
+  exit 2
+  ;;
+esac

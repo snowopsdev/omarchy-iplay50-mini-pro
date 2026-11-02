@@ -1,0 +1,4 @@
+# Panel backlight (mtk_leds_pwm, LED class "lcd-backlight"): let the video
+# group (the desktop user) write it, so tablet-display can turn it off with
+# the screen. DPMS alone leaves it lit.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="lcd-backlight", RUN+="/bin/sh -c 'chgrp video /sys%p/brightness && chmod 0664 /sys%p/brightness'"

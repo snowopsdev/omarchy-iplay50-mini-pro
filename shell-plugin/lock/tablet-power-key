@@ -3,15 +3,16 @@
 # lock PIN is set) and turn the screen off. Screen off: turn it on; when
 # locked, the lock screen shows and turns the screen off again if untouched.
 # If the shell does not answer, the screen still turns on, so a dead shell
-# can never leave the panel dark.
-on=$(hyprctl monitors -j 2>/dev/null | jq -r '[.[] | select(.disabled == false)] | all(.dpmsStatus)')
+# can never leave the panel dark. The screen state comes from tablet-display,
+# not DPMS: Hyprland re-enables DPMS at the key press itself, before this runs.
+display=/opt/omarchy-tablet/lock/tablet-display
 # omarchy-shell prints refusals ("Target not found" while the shell starts)
 # with a zero exit, so go by the reply.
-if [[ $on == false ]]; then
-  [[ $(omarchy-shell tabletLock wake 2>/dev/null) == ok ]] || omarchy-brightness-display on
+if [[ $("$display" status) == off ]]; then
+  [[ $(omarchy-shell tabletLock wake 2>/dev/null) == ok ]] || "$display" on
 else
   case $(omarchy-shell tabletLock screenOff 2>/dev/null) in
     ok | locking) ;;
-    *) omarchy-brightness-display off ;;
+    *) "$display" off ;;
   esac
 fi

@@ -18,7 +18,8 @@ import qs.Commons as Commons
 // restarts). Without a PIN `lock lock` refuses ("missing-pam"), as the stock
 // lock does without PAM, so nothing can lock the tablet with no way back in.
 //
-// Screen: the power key runs tablet-power-key -> `tabletLock screenOff|wake`.
+// Screen: the power key runs tablet-power-key -> `tabletLock screenOff|wake`;
+// /opt/omarchy-tablet/lock/tablet-display turns DPMS and the backlight off/on.
 // While locked the screen turns off after 10 s untouched (30 s on the keypad).
 //
 // IPC `tabletLock`: lockNow (Home's Lock button; opens setup without a PIN),
@@ -31,6 +32,7 @@ Item {
   property var manifest: null
 
   readonly property string pinTool: "/opt/omarchy-tablet/lock/tablet-lock-pin"
+  readonly property string displayTool: "/opt/omarchy-tablet/lock/tablet-display"
   readonly property string hapticTool: "/opt/omarchy-tablet/haptics/tablet-haptic"
   readonly property string home: Quickshell.env("HOME")
   readonly property string pinFile: home + "/.config/omarchy/tablet-lock.json"
@@ -44,6 +46,7 @@ Item {
   // Session lock
   property bool lockRequested: false
   property bool blankWhenSecure: false
+  property bool screenIsOff: false         // turned off by blank(), until wake()
   property bool strandedLockResolved: false
   property string lastEvent: "init"
   property string lastEventAt: ""
@@ -127,13 +130,19 @@ Item {
     idleTimer.stop()
     resetEntry()
     view = "cover"
-    run(["omarchy-brightness-display", "off"])
+    screenIsOff = true
+    run([displayTool, "off"])
   }
 
   function wake() {
-    run(["omarchy-brightness-display", "on"])
-    if (currentlyLocked()) { resetEntry(); view = "cover"; armIdle() }
+    run([displayTool, "on"])
+    woke()
     return "ok"
+  }
+
+  function woke() {
+    screenIsOff = false
+    if (currentlyLocked()) { resetEntry(); view = "cover"; armIdle() }
   }
 
   function armIdle() {
@@ -441,6 +450,25 @@ Item {
   }
 
   Timer { id: pendingLockTimer; interval: 100; repeat: true; onTriggered: root.requestSessionLock() }
+  // Hyprland (a key press) and Omarchy's idle wake turn DPMS back on without
+  // the backlight that tablet-display turned off. On any input while the
+  // screen is off, `tablet-display sync` finishes such a wake. The 2 s
+  // timeout keeps the power key press that turned the screen off out of it.
+  IdleMonitor {
+    enabled: root.screenIsOff
+    respectInhibitors: false
+    timeout: 2
+    onIsIdleChanged: if (!isIdle && !displaySync.running) displaySync.running = true
+  }
+  Process {
+    id: displaySync
+    command: [root.displayTool, "sync"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text).trim() === "on" && root.screenIsOff) root.woke()
+    }
+  }
+
   Timer { id: blankFallback; interval: 2000; onTriggered: if (root.blankWhenSecure) root.blank() }
   Timer {
     id: idleTimer
@@ -638,7 +666,8 @@ Item {
         secure: sessionLock.secure, view: root.view, entered: root.entered.length,
         checking: root.checking, message: root.message,
         wait: Math.max(0, Math.ceil((root.waitUntil - Date.now()) / 1000)),
-        setup: root.setupOpen ? root.setupStep : "", lastEvent: root.lastEvent
+        setup: root.setupOpen ? root.setupStep : "", screenOff: root.screenIsOff,
+        lastEvent: root.lastEvent
       })
     }
   }

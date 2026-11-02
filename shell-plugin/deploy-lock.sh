@@ -2,7 +2,8 @@
 # Public-repo adaptation: uses the shared SSH helper tools/tablet.
 # Install the tablet PIN lock screen (plugin tablet.lock) for the desktop user.
 # Usage: shell-plugin/deploy-lock.sh [IDLE_LOCK_SECONDS]   (default 300; 0 = never)
-# - /opt/omarchy-tablet/lock/{tablet-lock-pin,tablet-power-key}
+# - /opt/omarchy-tablet/lock/{tablet-lock-pin,tablet-power-key,tablet-display}
+# - /etc/udev/rules.d/99-tablet-backlight.rules (backlight writable by video)
 # - ~/.config/omarchy/plugins/tablet.lock; shell.json enables it, disables
 #   omarchy.lock (same `lock` IPC target) and sets idle.lock
 # - bindings.lua: the power key runs tablet-power-key (marked block)
@@ -27,7 +28,11 @@ cp -p "$home/.config/omarchy/shell.json" "$bindings" "$backup/"
 [[ -d $plugins/tablet.lock ]] && cp -a "$plugins/tablet.lock" "$backup/"
 
 install -d -m 755 /opt/omarchy-tablet/lock
-install -m 755 "$stage/lock/tablet-lock-pin" "$stage/lock/tablet-power-key" /opt/omarchy-tablet/lock/
+install -m 755 "$stage/lock/tablet-lock-pin" "$stage/lock/tablet-power-key" "$stage/lock/tablet-display" /opt/omarchy-tablet/lock/
+install -m 644 "$stage/lock/99-tablet-backlight.rules" /etc/udev/rules.d/
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=leds --sysname-match=lcd-backlight
+udevadm settle
 
 install -d -o hypr -g hypr "$plugins" "$home/.cache"
 next=$(mktemp -d "$home/.cache/tablet.lock.XXXXXX")

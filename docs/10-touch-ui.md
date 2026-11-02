@@ -22,7 +22,8 @@ Files in this repo:
 | `touch-ui/deploy.sh` | Install keyboard binary + helper + bar, with backups |
 | `shell-plugin/plugin/tablet.touch/` | The Quickshell plugin: `manifest.json`, `TouchShell.qml`, `KidMode.qml` |
 | `shell-plugin/plugin/tablet.lock/` | The lock screen plugin: `manifest.json`, `Service.qml` (session lock, IPC, PIN setup sheet), `LockView.qml`, `PinPad.qml` |
-| `shell-plugin/lock/{tablet-lock-pin,tablet-power-key}` | PIN store and checker (scrypt, rate limit), power key action; installed in `/opt/omarchy-tablet/lock/` |
+| `shell-plugin/lock/{tablet-lock-pin,tablet-power-key,tablet-display}` | PIN store and checker (scrypt, rate limit), power key action, screen off/on (DPMS + backlight); installed in `/opt/omarchy-tablet/lock/` |
+| `shell-plugin/lock/99-tablet-backlight.rules` | udev: the panel backlight writable by the `video` group |
 | `shell-plugin/deploy-lock.sh` | Install the lock screen, power key binding and idle lock, with backups |
 | `shell-plugin/{deploy.sh,restart-shell,qs,shot}` | Install the plugin, restart only the shell, shell IPC/log, screenshot |
 | `shell-plugin/tools/touch-tap.py` | Injects real multitouch frames into `mtk-tpd` (testing) |
@@ -40,7 +41,7 @@ Files in this repo:
 | Home, dock, handle (tap = peek, swipe up = Home), Open apps (switch, ×) | Works in landscape (injected touch) | 2026-10-29; × closed only the chosen window |
 | Rotation: handle/dock drawn at the right size after rotating | Fixed | 6/6 rotations correct by 1.5 s; screenshots in both orientations |
 | Kid Mode: PIN setup, allow-list tiles, closing non-allowed windows, kid keyboard pages, leave | Works | Verified on the device by touch (2026-10-29); persisted across a shell restart |
-| Lock screen: PIN unlock by touch, power key screen off/on, lock after 5 min idle, wrong-PIN lockout, take-over after a shell restart while locked | Works (injected touch and IPC) | 2026-11-02: swipe up + typed PIN unlocked by injected touch; 3 power-key off/on cycles; 5 wrong PINs → 30 s wait, then unlock; restart while locked → the new shell re-took the lock in ~5 s and the PIN opened it. Not yet used by hand; suspend still untested |
+| Lock screen: PIN unlock by touch, power key screen off/on, lock after 5 min idle, wrong-PIN lockout, take-over after a shell restart while locked | Works (injected touch and IPC) | 2026-11-02: swipe up + typed PIN unlocked by injected touch; 3 power-key off/on cycles; 5 wrong PINs → 30 s wait, then unlock; restart while locked → the new shell re-took the lock in ~5 s and the PIN opened it. Fixed after the first use by hand: screen off left the backlight lit (below); real power/volume key events then checked. Suspend still untested |
 | Re-showing keys by tapping an already focused terminal after a manual Hide | Not working | No new focus event; use the bar/handle keyboard glyph |
 | fcitx5 CapsLock compose in Wayland apps | Lost (by design) | Cost of disabling fcitx5 `waylandim` |
 | Notification popups in Kid Mode | Not blocked | They still show on top |
@@ -186,8 +187,8 @@ shell-plugin/deploy-lock.sh 300   # helpers, plugin tablet.lock, shell.json, pow
 shell-plugin/restart-shell        # required: the lock service replaces omarchy.lock on start
 ```
 
-`deploy-lock.sh` installs `tablet-lock-pin` and `tablet-power-key` in
-`/opt/omarchy-tablet/lock/`, the plugin in `~hypr/.config/omarchy/plugins/tablet.lock`,
+`deploy-lock.sh` installs `tablet-lock-pin`, `tablet-power-key` and `tablet-display` in
+`/opt/omarchy-tablet/lock/`, the udev rule `99-tablet-backlight.rules`, the plugin in `~hypr/.config/omarchy/plugins/tablet.lock`,
 adds it to `plugins[]`, puts `omarchy.lock` in `disabledPlugins[]`, sets `idle.lock`, and
 appends a marked block to `~hypr/.config/hypr/bindings.lua` that rebinds the power key
 (`XF86PowerOff`, allowed while locked). Backups: `/opt/omarchy-tablet/backups/lock-*`.
@@ -286,7 +287,8 @@ it asks for the current one first, and **Remove PIN** turns locking off). Then:
 - **Lock**: the Lock button on Home, the power key, Omarchy's menu, or 5 minutes without
   input. Without a PIN nothing locks (the Lock button opens PIN setup instead).
 - **Power key**: screen on → lock and screen off; screen off → screen on. The lock
-  screen turns the screen off again after 10 s untouched (30 s on the keypad).
+  screen turns the screen off again after 10 s untouched (30 s on the keypad). A volume
+  key also turns the screen on (Hyprland's `key_press_enables_dpms`).
 - **Unlock**: swipe up (or tap), type the PIN; it opens as soon as the last digit is in.
   After 5 wrong PINs in a row each try waits 30 s, doubling up to 15 minutes; the count
   survives restarts.
@@ -314,7 +316,7 @@ Honest limits:
 - The power key no longer opens Omarchy's power menu; use the bar's power widget or the
   Omarchy menu to shut down or restart.
 - Suspend is still untested ([11-power-battery.md](11-power-battery.md)); "screen off"
-  is DPMS off only, so the tablet keeps running.
+  is panel and backlight off only, so the tablet keeps running.
 
 Forgotten PIN, or stuck behind a lock (from the desktop):
 
@@ -370,6 +372,17 @@ Shell plugin / Quickshell / QML:
   nothing, so a lock requested with the screen already off never reports secure (and
   lock-before-suspend would time out). The power key waits for `secure`, with a 2 s
   fallback.
+- **DPMS off does not turn the backlight off.** It powers the DSI panel down, but the
+  MTK PWM backlight (`/sys/class/leds/lcd-backlight`) stays at its level: a glowing black
+  screen. `tablet-display off` sets the backlight to 0 too and saves the level; `on`
+  restores it. Everything else that turns DPMS on (Hyprland at any key press, Omarchy's
+  idle wake via `omarchy-brightness-display on`) does not know about the backlight, and
+  Hyprland has no DPMS event, so the lock service watches for input while the screen
+  is off (`IdleMonitor`) and runs `tablet-display sync`, which restores the backlight if
+  DPMS came back on. The saved level is also the screen-off flag: the power key cannot
+  go by DPMS, which Hyprland has already turned on by the time the binding runs.
+- **A DPMS disable right as the lock turns secure is ignored.** Hyprland answers `ok` but
+  the panel stays on; `tablet-display off` checks and repeats for up to 2 s.
 - **The on-screen keyboard covers overlay sheets.** wvkbd lives in the overlay layer; the
   PIN setup sheet hides it first. The lock surface itself is above every layer.
 - **Never run stock `omarchy-restart-shell` on this tablet.** It relaunches the shell
@@ -426,7 +439,7 @@ Shell plugin / Quickshell / QML:
   `/opt/omarchy-tablet/backups/lock-*` (or remove `{"id":"tablet.lock"}`, the
   `omarchy.lock` entry in `disabledPlugins` and the marked `tablet.lock` block), set
   `idle.lock` back to 0 if wanted, then `shell-plugin/restart-shell`. Do not restart
-  while locked.
+  while locked. Delete `/etc/udev/rules.d/99-tablet-backlight.rules` too if wanted.
 - None of this touches packaged Omarchy files, Hyprland Lua, the desktop service, GPU
   settings or the kernel.
 
