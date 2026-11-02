@@ -1,0 +1,17 @@
+#!/bin/sh
+# Start an Electron app with its GPU process on the Mali (Zink on the private
+# PanVK build), the same way GPU Chromium runs. Usage: electron-gpu-run APP ARGS
+# The GPU process is launched through electron-gpu-process-launcher, which
+# needs --no-unsandboxed-zygote (otherwise it forks from a helper started
+# with the app's llvmpipe environment and ignores --gpu-launcher).
+# /opt/omarchy-tablet/gpu/electron/software (any file) keeps apps on llvmpipe.
+set -eu
+app=$1; shift
+if [ -e /opt/omarchy-tablet/gpu/electron/software ]; then
+    exec "$app" --ozone-platform=wayland --enable-wayland-ime "$@"
+fi
+exec "$app" --ozone-platform=wayland --enable-wayland-ime \
+    --use-gl=angle --use-angle=gles-egl --ignore-gpu-blocklist \
+    --enable-gpu-rasterization --disable-features=Vulkan \
+    --no-unsandboxed-zygote \
+    --gpu-launcher=/opt/omarchy-tablet/gpu/electron/electron-gpu-process-launcher "$@"

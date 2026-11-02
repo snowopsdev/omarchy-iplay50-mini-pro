@@ -25,9 +25,11 @@ lessons: [`../docs/08-gpu.md`](../docs/08-gpu.md).
 | `panvk/patches/fourfect-kbase-only-build.patch` | — | Build fix, in both PanVK builds |
 | `panvk/patches/panvk-kbase-signalled-export.patch` | — | Apps/browser build only (`/opt/omarchy-tablet/gpu/panvk-apps`): SYNC_FD export of finished work returns a signalled `sync_file` instead of -1 |
 | `panvk/test-panvk-tablet.sh` | `/opt/omarchy-tablet/diagnostics/gpu/` | Runs one isolated probe (enumerate/compute/gles/gbm) |
-| `tests/` | `/opt/omarchy-tablet/diagnostics/gpu/` (built there) | `gpu-smoke` (Vulkan compute), `egl-smoke` (GLES/xfb/GBM), `egl-fence-test` (native fence export), `egl-wayland-test` (GL window reaches the screen), `framebench`, `kmstest`, `test-sw.sh`, `hypr-test.lua` |
+| `tests/` | `/opt/omarchy-tablet/diagnostics/gpu/` (built there) | `gpu-smoke` (Vulkan compute), `egl-smoke` (GLES/xfb/GBM), `egl-fence-test` (native fence export), `egl-wayland-test` (GL window reaches the screen), `buffer-bench` (fill/copy/rotation into native and linear dma-buf targets, cost of many small render passes), `kbase-job-times.sh` (Mali job time per slot, kprobes), `framebench`, `kmstest`, `test-sw.sh`, `hypr-test.lua` |
 | `browser-gpu/chromium-gpu-process-launcher` | `/opt/omarchy-tablet/gpu/browser/chromium-gpu-process-launcher` | Chromium `--gpu-launcher`: GPU process on the Mali GPU, plus the hardware video bridge |
-| `browser-gpu/chromium-gpu-trial`, `cdp.mjs`, `playback.html` | not installed | Isolated trial launcher (`TABLET_CHROMIUM_ICD` selects the driver), DevTools helper, playback measurement page |
+| `browser-gpu/chromium-gpu-trial`, `cdp.mjs`, `cdp-trace.mjs`, `playback.html` | not installed | Isolated trial launcher (`TABLET_CHROMIUM_ICD` selects the driver), DevTools helper, DevTools trace summary (time per GPU/Viz event), playback measurement page |
+| `electron-gpu/electron-gpu-process-launcher`, `electron-gpu-run` | `/opt/omarchy-tablet/gpu/electron/` | Electron apps on the Mali GPU: `--gpu-launcher` environment (no video bridge) and the flags wrapper |
+| `electron-gpu/obsidian` | `/usr/local/bin/obsidian` | Starts Obsidian through `electron-gpu-run` |
 | other `browser-gpu/` files | not installed | Rejected Chromium GPU trials (kept for reference) |
 | `historical/` | not installed | Abandoned libmali route (test script, Hyprland EGL patch, dma-buf exporter build) |
 

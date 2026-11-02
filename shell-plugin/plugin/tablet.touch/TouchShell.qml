@@ -74,6 +74,15 @@ Item {
 
   readonly property bool opened: homeRequested || switcherOpen || peeked
 
+  // Full-screen shell layers stay mapped (showing them is then a repaint of a
+  // live scene, ~17 ms to the first frame; a new surface rebuilds its scene
+  // and textures, ~110 ms), but are parked off-screen while hidden. Hyprland
+  // blends every on-screen layer over each damaged region every frame,
+  // transparent or not: five idle full-screen layers held the GPU desktop at
+  // 30 fps (2026-11-02). A layer outside the monitor is not drawn at all.
+  readonly property int parkOffset: 20000
+  function park(shown) { return shown ? 0 : parkOffset }
+
   readonly property var workspaceWindows: {
     var ws = Hyprland.focusedWorkspace
     if (!ws || !ws.toplevels) return []
@@ -549,6 +558,8 @@ Item {
     id: homeWindow
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     visible: root.mapAllowed
+    // Parked off-screen while hidden (see parkOffset).
+    margins { top: -root.park(root.homeVisible); bottom: root.park(root.homeVisible) }
     anchors { top: true; left: true; right: true; bottom: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Normal
@@ -568,9 +579,9 @@ Item {
       }
     }
 
+
     // Kept mapped: showing is a cheap repaint, not a new surface.
     mask: Region { width: root.homeVisible ? homeWindow.width : 0; height: root.homeVisible ? homeWindow.height : 0 }
-
     Item {
       anchors.fill: parent
       visible: root.homeVisible
@@ -749,6 +760,7 @@ Item {
     id: switcherWindow
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     visible: root.mapAllowed
+    margins { top: -root.park(root.switcherShown); bottom: root.park(root.switcherShown) }
     anchors { top: true; left: true; right: true; bottom: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Normal
@@ -766,9 +778,9 @@ Item {
     WlrLayershell.layer: WlrLayer.Top
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
+
     // Kept mapped: showing is a cheap repaint, not a new surface.
     mask: Region { width: root.switcherShown ? switcherWindow.width : 0; height: root.switcherShown ? switcherWindow.height : 0 }
-
     Item {
       anchors.fill: parent
       visible: root.switcherShown
@@ -873,11 +885,12 @@ Item {
   }
 
   // While peeking, a transparent catcher above the app dismisses the dock on
-  // any tap away. Always mapped and never drawn; only its input mask changes.
+  // any tap away. Never drawn; parked off-screen unless peeking.
   PanelWindow {
     id: peekCatcher
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     visible: root.mapAllowed
+    margins { top: -root.park(root.peeked); bottom: root.park(root.peeked) }
     anchors { top: true; left: true; right: true; bottom: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore

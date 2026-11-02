@@ -293,6 +293,8 @@ Item {
     id: homeWindow
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     visible: kid.touch.mapAllowed
+    // Parked off-screen while hidden, like the touch shell's Home.
+    margins { top: -kid.touch.park(kid.homeVisible); bottom: kid.touch.park(kid.homeVisible) }
     anchors { top: true; left: true; right: true; bottom: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
@@ -449,6 +451,7 @@ Item {
     id: overlayWindow
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     visible: kid.touch.mapAllowed
+    margins { top: -kid.touch.park(kid.overlayVisible); bottom: kid.touch.park(kid.overlayVisible) }
     anchors { top: true; left: true; right: true; bottom: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore

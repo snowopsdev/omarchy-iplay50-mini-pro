@@ -7,10 +7,13 @@ Omarchy shell, GTK 4 and Qt applications, mpv and Chromium (page rendering,
 compositing, WebGL and the hardware-decoded video) render on the GPU too,
 through a second PanVK build with one patch; see
 [Applications and Chromium on the GPU](#applications-and-chromium-on-the-gpu-2026-10-31).
-Terminals (Foot), GTK 3 and Electron apps still draw on the CPU.
+Since 2026-11-02 Electron apps (Obsidian) do too, and the desktop reaches
+60 fps instead of 30 after a touch-shell fix; see
+[Frame rate: the shell's hidden layers](#frame-rate-the-shells-hidden-layers-2026-11-02).
+Terminals (Foot) and GTK 3 apps still draw on the CPU.
 Source files: [`graphics/`](../graphics/README.md).
 Work dates: 2026-10-28 (bring-up), 2026-10-29 (follow-ups), 2026-10-31
-(applications and browser).
+(applications and browser), 2026-11-02 (Electron, frame rate).
 
 ## Status
 
@@ -24,12 +27,14 @@ Work dates: 2026-10-28 (bring-up), 2026-10-29 (follow-ups), 2026-10-31
 | Chromium WebGL Aquarium (500 fish, 1024x1024 canvas) | 41-44 fps | Software profile: 7.4 fps |
 | Chromium hardware video + GPU rendering, local 1080p30 clip | 3-6 % frames dropped | Same clip on the software profile: 10-17 %. 4-minute soak (9 x 25 s, windowed and fullscreen alternating): 3.8-6.2 %, no GPU fault, no reset |
 | YouTube, 60 fps video, 20 s | GPU: 720p, 1201 frames, 485 dropped (~36 fps shown) | Software: YouTube chose 480p and showed 58 frames in 19 s. YouTube picks a different resolution per browser, so this is not a controlled comparison |
-| Chromium page scroll (Wikipedia, 5 s) | 30.6 fps, 95th-percentile frame 51 ms | Software: 28.2 fps, 68 ms. Little gain: scrolling is not bound by rasterisation here |
+| Desktop frame rate | **60 fps** since 2026-11-02 | Was 30 fps with any GPU work: five idle full-screen touch-shell layers cost Hyprland 11-17 ms of GPU time per frame; now 3.3 ms (90th percentile) |
+| Chromium page scroll (Wikipedia, 8 s, full window) | ~50 fps, median frame 17 ms (2026-11-02) | Software: 22-26 fps. On 2026-10-31, before the shell fix: 30.6 fps (software 28.2) |
 | Omarchy shell (Quickshell / Qt Quick) on the GPU | **Works**, default since 2026-10-31 | Home screen opened and closed 6 times: 0.17 s of shell CPU time (software: 4.74 s); resident memory 509 MB (software: 674 MB) |
 | GTK 4 apps (GL and Vulkan renderers), Qt Quick, mpv (OpenGL), vkcube | **Work** | Correct pixels on screen (screenshots), Mali driver mapped. Checked: Nautilus, mpv, a Qt Quick test window. LibreOffice and Obsidian also open normally under the GPU profile |
 | mpv with Vulkan output (`gpu-api=vulkan`, libplacebo) | **Crashes** | Segfault, also with the compositor's unpatched driver and without dma-buf presentation; `~/.config/mpv/mpv.conf` sets `gpu-api=opengl` |
-| Electron apps (Obsidian checked), GTK 3 apps, Foot | CPU | They work under the GPU profile but draw in software: Electron's GPU process ends up on llvmpipe, GTK 3 and Foot draw with Cairo/pixman |
-| Simple GL window frame rate (glClear + swap, 1280x458) | 28 fps | Through shared dma-heap buffers; 20 fps through the CPU-copy (wl_shm) swapchain. Not investigated further |
+| Electron apps (Obsidian) on the GPU | **Works**, default since 2026-11-02 | Scrolling a long list: 58 fps; small animations 59 fps; full-window repaints 29 fps (software: 8 fps, five times the CPU time). Started through `/usr/local/bin/obsidian`, see [Electron apps](#electron-apps-on-the-gpu-2026-11-02) |
+| GTK 3 apps, Foot | CPU | They work under the GPU profile but draw with Cairo/pixman |
+| Simple GL window frame rate (glClear + swap, 1280x458) | 58.8 fps (2026-11-02) | Through shared dma-heap buffers. 28 fps before the shell fix; 20 fps through the CPU-copy (wl_shm) swapchain |
 | Hardware cursor plane | **Not usable** | The vendor cursor ioctl resets the tablet; a shim refuses it, cursors are software |
 | Arm libmali (MediaTek Genio r32p0 builds) | **Not working** | Both builds reject this GPU (GPU ID 0x9093 r0p1); abandoned |
 | Vulkan conformance | Not conformant | PanVK prints "not a conformant Vulkan implementation, testing use only" |
@@ -173,6 +178,106 @@ launches inherit. With `/opt/omarchy-tablet/gpu/apps-gpu` present it execs
 keeps the old llvmpipe profile. The autostart module clears the graphics
 variables from the systemd user manager before importing, so a variable one
 profile does not set cannot linger from UWSM.
+
+### Electron apps on the GPU (2026-11-02)
+
+Electron starts its GPU process from the app's environment. Under
+`gpu-app-env` that holds `LIBGL_ALWAYS_SOFTWARE=1`, which is right for the
+app's Wayland windows (fix 2 above) but makes Electron's GBM/surfaceless EGL
+pick llvmpipe. Electron honours Chromium's `--gpu-launcher`, so it gets the
+browser's arrangement:
+
+- `graphics/electron-gpu/electron-gpu-process-launcher` (installed in
+  `/opt/omarchy-tablet/gpu/electron/`) gives the GPU process
+  `GALLIUM_DRIVER=zink`, the apps ICD and the PanVK flags, without the video
+  bridge.
+- `--no-unsandboxed-zygote` is required. Without it Electron forks the GPU
+  process from a helper that was started with the app's environment, and
+  ignores `--gpu-launcher`; Chromium's flags already had it for the same reason.
+- `graphics/electron-gpu/electron-gpu-run APP ARGS` adds those flags plus
+  `--use-gl=angle --use-angle=gles-egl --ignore-gpu-blocklist
+  --enable-gpu-rasterization --disable-features=Vulkan` and the Wayland flags.
+  `graphics/electron-gpu/obsidian` is installed as `/usr/local/bin/obsidian`,
+  ahead of the package's `/usr/bin/obsidian` symlink, so the desktop entry and
+  the terminal both use it. The Arch package no longer has a wrapper that reads
+  `~/.config/obsidian/user-flags.conf`; that file was dead (it held
+  `-disable-gpu`).
+
+Checked: the GPU process maps `panvk-apps`; DevTools `SystemInfo` reports
+`ANGLE (Mesa, zink Vulkan 1.3(Mali-G57 MC2 (MESA_PANVK)) ...)`, Skia
+`GaneshGL`, GPU compositing and rasterisation on; the window draws correctly
+on screen. Other Electron apps would need the same wrapper; Arch's
+system-Electron apps read `~/.config/electron*-flags.conf` instead. Only
+Obsidian is installed, so nothing else was tried.
+
+### Frame rate: the shell's hidden layers (2026-11-02)
+
+Every GPU app topped out near 30 fps, with frames landing on exactly two
+refresh intervals (34 ms). Software apps did too. The cause was not in the
+GPU stack:
+
+- Hyprland's own frame was one fragment job of **11-17 ms** on the Mali
+  (measured with kprobes on `kbase_job_hw_submit` and `kbase_job_done`,
+  `graphics/tests/kbase-job-times.sh`), over the 16.7 ms budget, so the
+  compositor missed every other refresh.
+- `hyprctl layers` showed why: the touch shell kept five full-screen layers
+  mapped at all times (`tablet-home`, `tablet-switcher`, `tablet-peek`,
+  `tablet-kids`, `tablet-kids-parent`), showing and hiding them by changing
+  only their input mask. That was chosen when the shell drew on llvmpipe and a
+  new layer took ~150 ms. They were transparent, but Hyprland cannot know that:
+  it blends each mapped layer over every damaged region, every frame.
+- With the shell stopped, Hyprland's frame dropped to ~3.2 ms and Obsidian
+  scrolled at 59 fps instead of 30.
+
+The fix keeps those layers mapped but parks them off-screen while hidden: a
+layer-shell margin of -20000 px at the top and +20000 at the bottom moves the
+surface out of the monitor without changing its size (`park()` in
+`TouchShell.qml`, used by `KidMode.qml`). Hyprland skips layers outside the
+monitor, and Qt keeps the window's scene, textures and layout, so showing is
+still a repaint. Unmapping them instead was tried first. It gave the same frame
+rate, but Home then took ~110 ms from state change to first frame instead of
+~10 ms, because each new surface rebuilds its scene and uploads its icons
+again. Pre-mapping the empty surface on touch-down did not help. The bar,
+handle and dock stay on screen: they are small, and the handle's constant
+space reservation avoids app resizes. `perf/measure-show.py`: Home state
+change to first frame 12 ms (median of 5); IPC request to first frame
+(includes ~0.1 s of `quickshell ipc`) 134 ms for Home and 137 ms for Open
+apps, against 139 and 137 ms before.
+
+Measured after the fix:
+
+| Test | GPU | Software |
+|---|---|---|
+| Obsidian, scroll a 3000-line list | 58 fps | — |
+| Obsidian, small animation / full-window repaint / 300 moving dots | 59 / 29 / 28 fps | 56 / 8 / 7 fps |
+| Chromium, Wikipedia scroll (1280x631) | ~50 fps | 22-26 fps |
+| Chromium, full-window repaint, plain page | 55 fps | — |
+| `egl-wayland-test` GL window | 58.8 fps | — |
+
+Full-window repaints in Obsidian remain GPU-bound. Chromium re-rasterises
+every tile: about 40 render passes per frame (PanVK's `PANVK_FRAME_PROF=FILE
+PANVK_FRAME_PROF_PASSES=1` lists them). These include tiles split into ~2.5
+passes that each re-read the tile, small offscreen passes for blurred shadows,
+and two 8x MSAA passes with depth/stencil. `--gpu-rasterization-msaa-sample-count=0`
+did not remove those. Each pass also carries a fixed cost on this GPU, from
+`graphics/tests/buffer-bench.c` and the kprobe trace: a 256x256 fragment job
+takes ~108 us, its tiler job ~24 us, and kbase resolves each job-to-job
+dependency in a worker thread (~55 us from interrupt to the next job). That
+adds up to ~0.3 ms per pass. Its debugfs `atoms` file shows every atom of a
+submission waiting in software (`St 1`), so the dependencies are not handled
+in the job-slot ring buffers. Things that made no difference: skipping the L2
+flush between the atoms of one submission (`BASE_JD_REQ_SKIP_CACHE_*`),
+`always_on` GPU power policy, and holding `/dev/cpu_dma_latency` at 0. The
+driver was left unchanged. Full-screen fill, copy and 90-degree-rotated copy
+at 1920x1200 cost ~2 ms each, into linear dma-bufs too, so the rotated
+display and the linear scanout buffers are not the problem.
+
+How it was found, for the next time: DevTools tracing showed Viz with two
+frames in flight and the swap taking ~74 ms. `WAYLAND_DEBUG=client` showed
+presentation feedback a refresh late. `dma_fence` tracepoints showed each
+client frame's GPU work taking ~70 ms from submission to signal. GED
+(`/sys/kernel/ged/hal/gpu_utilization`) showed the GPU at 1003 MHz, 90 %
+busy. kprobes on kbase then measured per-job times.
 
 ### Why apps stayed on llvmpipe (history, superseded)
 
@@ -443,6 +548,23 @@ original device. Use `tools/tablet` from this repo to reach it.
       (`systemctl --user restart tablet-chromium-warm.service` as `hypr`, or
       close it) to pick up the new flags.
 
+   f. *Electron apps* (2026-11-02, root):
+
+      ```sh
+      install -D -m0755 graphics/electron-gpu/electron-gpu-process-launcher \
+        graphics/electron-gpu/electron-gpu-run -t /opt/omarchy-tablet/gpu/electron/
+      install -m0755 graphics/electron-gpu/obsidian /usr/local/bin/obsidian
+      ```
+
+      Restart Obsidian. Its GPU process (`pgrep -f 'obsidian --type=gpu-process'`)
+      must map `panvk-apps/lib/libvulkan_panfrost.so`.
+
+   g. *Touch shell with parked layers* (2026-11-02): deploy the current
+      `shell-plugin/` ([10-touch-ui.md](10-touch-ui.md)). With Home closed,
+      `hyprctl layers` should show `tablet-home`, `tablet-switcher`,
+      `tablet-peek`, `tablet-kids` and `tablet-kids-parent` at y = -20000 or
+      -19952, and only the bar, handle and dock (and `wvkbd`) on screen.
+
 ### Verify
 
 ```sh
@@ -481,6 +603,7 @@ apps ICD and `PANVK_KBASE_DRI3=1`.
 | Apps and shell on the GPU | `touch /opt/omarchy-tablet/gpu/apps-gpu`, log in again (restart `omarchy-desktop.service`) |
 | Apps and shell back on llvmpipe | `rm /opt/omarchy-tablet/gpu/apps-gpu`, log in again; `shell-plugin/restart-shell software` switches only the shell, until the next login |
 | Chromium back on llvmpipe | `touch /opt/omarchy-tablet/gpu/browser/software`, restart Chromium (the GPU-process launcher then hands over to the old one; GPU rasterisation stays requested but runs on llvmpipe) |
+| Electron apps back on llvmpipe | `touch /opt/omarchy-tablet/gpu/electron/software`, restart the app (or `rm /usr/local/bin/obsidian`) |
 
 ## Pitfalls and lessons
 
@@ -496,6 +619,12 @@ apps ICD and `PANVK_KBASE_DRI3=1`.
   `GALLIUM_DRIVER=zink` (its launcher sets it). An app that renders correctly
   into its back buffer but shows black is on the wrong one.
 - **mpv's Vulkan output crashes on PanVK**; keep `gpu-api=opengl`.
+- **Every on-screen layer costs a full blend per frame, even when transparent.**
+  Park hidden shell overlays off-screen (or unmap them); five idle full-screen
+  layers halved the frame rate of the whole desktop. `hyprctl layers` is the
+  first thing to check when everything is stuck at 30 fps.
+- **Electron needs `--no-unsandboxed-zygote` for `--gpu-launcher` to apply.**
+  Check `/proc/<gpu-process>/maps`, not the flags.
 - **Not tested on the GPU profile:** long sessions of the shell on the GPU
   (only restarts and short checks), suspend/resume, battery impact, Kdenlive
   and OBS. The two unexplained resets from the video work
@@ -545,6 +674,10 @@ apps ICD and `PANVK_KBASE_DRI3=1`.
   (environment, autostart module, desktop unit), remove
   `/home/hypr/.config/default/hypr/autostart.lua` and the udev rule, delete
   `/opt/omarchy-tablet/gpu/panvk-fourfect`.
+- Electron (2026-11-02): `rm /usr/local/bin/obsidian`; the previous (unused)
+  `user-flags.conf` is in `/opt/omarchy-tablet/backups/obsidian-user-flags.conf.pre-gpu-*`.
+  The touch shell's previous plugin copy is in
+  `/opt/omarchy-tablet/backups/touch-shell-*` (`shell-plugin/deploy.sh` makes one each run).
 - Applications/browser (2026-10-31): `rm /opt/omarchy-tablet/gpu/apps-gpu`
   and log in again; restore `chromium-flags.conf` from its backup (the
   project's is `/opt/omarchy-tablet/backups/chromium-flags.conf.pre-gpu-*`) or

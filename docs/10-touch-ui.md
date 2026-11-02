@@ -310,9 +310,16 @@ Shell plugin / Quickshell / QML:
   use `DragThreshold`. `DragHandler.translation` resets when the drag ends: record
   `activeTranslation` while active.
 - Keep surfaces mapped. Mapping a new full-screen layer costs ~150 ms (llvmpipe first
-  frame). Home, Open apps, dock and the peek catcher stay mapped and toggle content
-  `visible` plus an input `mask: Region` (zero size = click-through). Touches pass
-  through masked layers (verified by tapping between two tiled windows).
+  frame; ~110 ms on the GPU, mostly rebuilding the scene and icons). Home, Open apps,
+  dock and the peek catcher stay mapped and toggle content `visible` plus an input
+  `mask: Region` (zero size = click-through). Touches pass through masked layers
+  (verified by tapping between two tiled windows).
+- But park hidden full-screen layers off-screen (2026-11-02). Hyprland blends every
+  on-screen layer over each damaged region every frame, even fully transparent ones:
+  Home, Open apps, the peek catcher and the two Kid Mode layers held the whole GPU
+  desktop at 30 fps. While hidden they get a top margin of -20000 and a bottom margin
+  of +20000 (`park()`), which moves them out of the monitor without resizing; showing
+  them is still a ~10 ms repaint. See [08-gpu.md](08-gpu.md#frame-rate-the-shells-hidden-layers-2026-11-02).
 - The handle surface and its 34 px reservation are permanent; only its content
   shows/hides. Mapping/unmapping it resized the app below every time.
 - Layer order: Home and Open apps are `Top`; the dock is `Overlay` so it stacks above

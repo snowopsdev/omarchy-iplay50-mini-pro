@@ -70,7 +70,8 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
 | Auto-rotation + touch alignment | Works (accelerometer; no gyroscope) | [06](docs/06-sensors.md) |
 | Speaker and built-in microphone (PipeWire) | Works (mic measured with a test tone, not yet by voice); headset and BT audio unvalidated | [07](docs/07-audio.md) |
 | GPU: Hyprland compositing on Mali-G57 (Zink + PanVK on the vendor kbase) | Works | [08](docs/08-gpu.md) |
-| GPU rendering for the shell, GTK 4/Qt apps, mpv and Chromium | Works since 2026-10-31 (one PanVK patch, no kernel change). WebGL Aquarium 7 → 42 fps; 1080p video drops 10-17 % → 3-6 %; shell CPU for opening Home 28x lower. Electron, GTK 3 and Foot still draw on the CPU; mpv must use OpenGL; long-term stability and battery impact unmeasured | [08](docs/08-gpu.md) |
+| GPU rendering for the shell, GTK 4/Qt apps, mpv, Chromium and Electron apps | Works since 2026-10-31 (one PanVK patch, no kernel change); Electron (Obsidian) since 2026-11-02. WebGL Aquarium 7 → 42 fps; 1080p video drops 10-17 % → 3-6 %; Wikipedia scrolling ~50 fps (software 22-26); shell CPU for opening Home 28x lower. GTK 3 and Foot still draw on the CPU; mpv must use OpenGL; long-term stability and battery impact unmeasured | [08](docs/08-gpu.md) |
+| Desktop frame rate | 60 fps since 2026-11-02; hidden full-screen shell layers had held everything at 30 | [08](docs/08-gpu.md#frame-rate-the-shells-hidden-layers-2026-11-02) |
 | Hardware H264 decoding in Chromium (vendor VCU + V4L2 bridge) | Works up to 1080p30, survives reboot; other codecs not validated; some frame drops | [09](docs/09-video-decoding.md) |
 | On-screen keyboard (tap a field → keys), key-press vibration, touch shell, Kid Mode | Works; some items unverified | [10](docs/10-touch-ui.md) |
 | GPS (vendor `mnld` in a Bionic chroot → `gpsd`) | Engine runs and streams NMEA to gpsd; **position fix not yet verified** (tested indoors only) | [13](docs/13-gps.md) |
@@ -89,10 +90,12 @@ management. So the project runs the tablet's **own Android kernel**, the Halium-
   `camerahalserver` with over 1,000 vendor libraries, behind Android binder
   services (hwservicemanager, gralloc, the HIDL camera provider). That needs a
   Halium/Droidian-style Android container plus a binder client. Not attempted.
-- **GPU rendering for Electron apps** (Obsidian etc.): they run fine under the
-  GPU profile but their GPU process lands on llvmpipe, likely because it uses
-  the same EGL settings as Wayland windows; giving it Chromium's setting
-  (`GALLIUM_DRIVER=zink`) is the obvious next try. Not attempted.
+- **Faster full-window repaints on the GPU.** Chromium and Electron re-rasterise
+  every tile in ~40 small render passes per frame, and each pass costs ~0.3 ms
+  of fixed overhead on this GPU and its vendor kernel driver (which resolves
+  job dependencies in a worker thread). Repainting a whole Obsidian window
+  runs at ~29 fps. Fewer passes (Chromium settings) or cheaper dependencies
+  (driver work) would help; see [08](docs/08-gpu.md#frame-rate-the-shells-hidden-layers-2026-11-02).
 
 The status tables at the top of each doc are the authoritative, item-by-item list, including
 what was only checked by injected input rather than by hand.

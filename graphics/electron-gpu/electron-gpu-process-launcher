@@ -1,0 +1,18 @@
+#!/bin/sh
+# GPU process launcher for Electron apps (--gpu-launcher). Electron starts its
+# GPU process from the app's environment, which on the tablet is gpu-app-env:
+# LIBGL_ALWAYS_SOFTWARE=1 there selects Zink's Wayland swapchain for normal
+# apps, but Electron's GPU process renders through GBM/surfaceless EGL, where
+# that variable means llvmpipe. Give it the browser's setting instead: Zink on
+# the private PanVK build, GBM buffers from kms_swrast. No video bridge.
+# /opt/omarchy-tablet/gpu/electron/software (any file) leaves it on llvmpipe.
+set -eu
+if [ -e /opt/omarchy-tablet/gpu/electron/software ]; then
+    exec "$@"
+fi
+unset LIBGL_ALWAYS_SOFTWARE MESA_LOADER_DRIVER_OVERRIDE VK_ICD_FILENAMES PANVK_KBASE_DRI3
+export GALLIUM_DRIVER=zink GBM_ALWAYS_SOFTWARE=1
+export VK_DRIVER_FILES=/opt/omarchy-tablet/gpu/panvk-apps/share/vulkan/icd.d/panfrost_icd.aarch64.json
+export PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1 PANVK_KBASE_USER_CACHE_SYNC=0
+export LD_PRELOAD=/opt/omarchy-tablet/drm-no-cursor.so
+exec "$@"

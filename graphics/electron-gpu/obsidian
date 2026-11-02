@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed as /usr/local/bin/obsidian, ahead of the package's /usr/bin/obsidian
+# symlink, so the desktop entry and the terminal both get the GPU flags.
+exec /opt/omarchy-tablet/gpu/electron/electron-gpu-run /opt/obsidian/obsidian "$@"

@@ -13,14 +13,16 @@ Files in this repo:
 | `perf/tablet-chromium-warm.service` | User service keeping one windowless Chromium running |
 | `perf/qa-latency.py` | End-to-end latency on the real display (kmsgrab) |
 | `perf/measure-frame.py`, `perf/measure-open.py` | Touch → shell frame / layer-map timers |
+| `perf/measure-show.py` | Home / Open apps over IPC → first shell frame (no touch input) |
 | `perf/chromium-bench/` | CDP benchmarks of a throwaway Chromium (`bench.mjs`, `sites.mjs`, `page.html`, `ctl.sh`, A/B drivers) |
 
 ## Status
 
 | Item | State |
 |---|---|
-| Apps (incl. Chromium) render on the CPU (llvmpipe); compositor on the GPU (Zink) | By design, current state |
+| Apps (incl. Chromium) render on the CPU (llvmpipe); compositor on the GPU (Zink) | Superseded: since 2026-10-31 the shell, apps and Chromium render on the GPU, see [08](08-gpu.md) |
 | Shell surfaces kept mapped: tap → first frame under ~10 ms (was ~150 ms) | Done, measured |
+| Hidden shell layers parked off-screen: desktop 30 → 60 fps (2026-11-02) | Done, measured; see [08](08-gpu.md#frame-rate-the-shells-hidden-layers-2026-11-02) |
 | Touch CPU boost service | Done, measured (small gain) |
 | Resize cascades on launch/typing removed (gaps/borders 0, permanent handle, keyboard debounce) | Done, measured |
 | Warm Chromium: browser/YouTube open in ~0.9 s instead of ~2.4 s | Done, measured |
