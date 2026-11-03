@@ -30,6 +30,8 @@ lessons: [`../docs/08-gpu.md`](../docs/08-gpu.md).
 | `browser-gpu/chromium-gpu-trial`, `cdp.mjs`, `cdp-trace.mjs`, `playback.html` | not installed | Isolated trial launcher (`TABLET_CHROMIUM_ICD` selects the driver), DevTools helper, DevTools trace summary (time per GPU/Viz event), playback measurement page |
 | `electron-gpu/electron-gpu-process-launcher`, `electron-gpu-run` | `/opt/omarchy-tablet/gpu/electron/` | Electron apps on the Mali GPU: `--gpu-launcher` environment (no video bridge) and the flags wrapper |
 | `electron-gpu/obsidian` | `/usr/local/bin/obsidian` | Starts Obsidian through `electron-gpu-run` |
+| `browser-gpu/experimental/chromium-queue5.patch` | not applied | Chromium source change: 5 presentation buffers instead of 3 (4 pending swaps); roughly halved 60 fps drops in a binary-patched test, see [09](../docs/09-video-decoding.md#pitfalls-and-lessons) |
+| `panvk/patches/experimental/panvk-kbase-import-cache.patch` | not applied | Caches dma-buf imports; no frame-rate gain |
 | other `browser-gpu/` files | not installed | Rejected Chromium GPU trials (kept for reference) |
 | `historical/` | not installed | Abandoned libmali route (test script, Hyprland EGL patch, dma-buf exporter build) |
 

@@ -248,6 +248,12 @@ asked for 1.2 A, and the tablet drains under load. The 500 mA SDP ceiling servic
 
 ## Pitfalls and lessons
 
+- **The USB debug link can stay dead after the desktop reboots (2026-11-03).** The
+  tablet enumerated once while the host booted, then dropped. After that, every
+  attempt failed with `usb 1-3: device descriptor read/64, error -110`, and no
+  network interface appeared on the host. Rebooting the tablet fixed it: the
+  gadget came back with the next boot. `omarchy-usb-gadget watch` does not catch
+  this case yet.
 - **EMI base is latched at module init (the main Wi-Fi bug).** `wlan_drv_gen4m_6789`'s
   `init_module` copies `gConEmiPhyBase`/`gConEmiSize` from `wmt_drv` into
   `gConEmiPhyBaseFinal` once. `wmt_drv` only fills those variables in `mtk_wmt_probe`. That

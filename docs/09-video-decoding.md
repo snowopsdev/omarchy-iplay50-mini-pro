@@ -24,7 +24,7 @@ Sources: [`video/`](../video/README.md). Work dates: 2026-10-28 to 2026-10-29.
 | Post-reboot YouTube 1080p | Works, drops frames | 150 s uninterrupted main content: 4505 frames / 755 dropped (~16.8 %) |
 | Browser presentation | GPU since 2026-10-31 | Local 1080p30 clip: 3-6 % frames dropped on the GPU vs 10-17 % on llvmpipe; 4-minute soak 3.8-6.2 %, no reset (see [08-gpu.md](08-gpu.md)). The YouTube numbers above were taken on llvmpipe |
 | YouTube 1080p30 on the GPU, NV12 view (2026-11-02) | **Works, ~2 % dropped** | 90 s (45 s windowed + 45 s fullscreen): 22/1349 and 25/1350 dropped. The GPU launcher's earlier BGR4 view dropped ~23 % (104/450, 98/449), which the user saw as stutter. Same frame captured in both modes: PSNR 49 dB |
-| YouTube 1080p60 on the GPU, NV12 view | Drops ~14 % (open) | 15 s each: 122/899 windowed, 132/900 fullscreen; 720p60 drops as much. Not decode-bound (the decoder returns 60.5 frames/s) and not GPU-bound (fragment slot ~43 % busy): Chromium's Wayland present loop is. See Pitfalls |
+| YouTube 1080p60 on the GPU, NV12 view | Drops ~6-12 % (open) | 30 s runs, 2 repeats, windowed and fullscreen (2026-11-03): 1.5-12.2 % per run; 720p60 5.4-8.9 %. Not decode-bound (the decoder returns 60.5 frames/s) and not GPU-bound (fragment slot ~43 % busy): Chromium's Wayland present loop is. Runtime explicit sync was tried and Chromium does not use it on kernel 5.10; a 5-buffer Chromium patch roughly halves the drops. See Pitfalls |
 | VP8 / VP9 / AV1 / HEVC | **Not validated** | The driver advertises more codecs; only H264 was ever decoded. The YouTube extension hides VP8/VP9/AV1 |
 | Protected (secure) playback | Not supported | Secure decode paths are never used |
 | HDR, 10-bit, 1080p60, 4K | Unverified | HDR/unknown colour metadata falls back to NV12; nothing beyond 1080p30 was measured |
@@ -363,9 +363,45 @@ found two causes:
   per-frame re-import of the video dma-buf (98 % hits, ~6 % less GPU-process CPU;
   `graphics/panvk/patches/experimental/`), `--enable-hardware-overlays` (the
   video was never promoted to a subsurface), `--disable-gpu-vsync`, pinning to
-  big cores. Real fixes would need explicit sync (kernel syncobj support plus real
-  GPU fences from PanVK) or more pending swaps; neither is a setting.
- It reports NEON but runs the C
+  big cores. Real fixes would need explicit sync or more pending swaps; neither
+  is a setting. Both were then tried (next item).
+
+- **Explicit sync does not help Chromium on this kernel; more pending swaps
+  helps a little (2026-11-03).**
+  - **What already works:** the apps PanVK already exports real, still-pending
+    GPU fences (20/20 in a stress test), so the GPU side needs no work.
+  - **Turning syncobj on at runtime works:** the closed `mediatek_drm` module
+    leaves `DRIVER_SYNCOBJ` and `DRIVER_SYNCOBJ_TIMELINE` out of its
+    `driver_features` (0x13), and that field is writable. A small helper module
+    ORed in 0x60 with `stop_machine`. It refuses while any DRM file is open,
+    because `drm_file_alloc` sets up syncobj state only at open time. So the
+    desktop session, user manager and seatd had to be stopped first, and
+    restarted afterwards.
+  - **Hyprland picks it up:** with the bits set, the syncobj ioctls pass basic
+    tests, Aquamarine reports timeline support, and Hyprland 0.56 advertises
+    `wp_linux_drm_syncobj_manager_v1`.
+  - **Chromium never uses it:** Chromium 153 never binds that protocol, because
+    `MinSupportedKernelForLinuxDrmSyncobj()` (in
+    `ui/ozone/platform/wayland/host/wayland_connection.cc`) requires kernel
+    6.11 or newer. It also needs `DRM_IOCTL_SYNCOBJ_EVENTFD`, which 5.10 lacks
+    (`EINVAL`). With no client fences, the compositor never submitted
+    `IN_FENCE_FD` either.
+  - **The result:** playback with the bits set was no better than without
+    (5.9-11.6 % vs 5.9-8.3 %, two 30 s runs per cell). The bits were set back
+    to 0x13, and the helper is not published.
+  - **What a real fix would take:** backporting the eventfd ioctl into the GKI
+    build, getting past Chromium's version gate, and then checking that the
+    vendor display engine honours pending fences.
+  - **More pending swaps:** Chromium's Linux buffer queue uses 3 buffers, so 2
+    pending swaps. `graphics/browser-gpu/experimental/chromium-queue5.patch`
+    raises that to 5 buffers. A trace confirmed 4 pending swaps, and drops fell
+    to 1.8-5.7 % (from 8.4-12.1 % in the same session). It was tested only as a
+    binary-patched copy of Chromium and is not deployed: it would need
+    rebuilding for every Chromium release.
+  - **Measure with many repeats:** single 30 s samples are noisy. The same
+    setup gave 1.5 % on one run and 10.2 % on the next.
+
+- **Arch Linux ARM's libyuv has no NEON code.** It reports NEON but runs the C
   rows: `NV12ToARGB` at 1920x1088 takes 11.2 ms on a Cortex-A76 and 33.7 ms on
   a Cortex-A55, the same with NEON masked off. The BGR4 view (detile + NV12 to
   ARGB per frame) therefore missed the 33 ms frame budget whenever the thread

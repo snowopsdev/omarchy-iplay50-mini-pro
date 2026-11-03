@@ -1,0 +1,22 @@
+Experimental, not applied anywhere (2026-11-03). Chromium 153.0.8010.36.
+
+Chromium's Linux SkiaOutputDeviceBufferQueue uses 3 buffers, which allows 2
+pending swaps; on this tablet each frame takes ~48 ms from draw to
+presentation, so 60 fps video is swap-throttled. With 5 buffers (4 pending
+swaps, confirmed in a trace) YouTube 60 fps drops fell from 8.4-12.1 % to
+1.8-5.7 % (two 30 s runs per cell, 1080p60 and 720p60, windowed and
+fullscreen). Costs two more 1080p-sized buffers per window and adds queue
+latency. Tested only as a binary-patched copy of the Arch ARM build (the
+constructor's `mov w8, #3`); a deployment needs a Chromium build with this
+change, redone and remeasured for every release. See
+docs/09-video-decoding.md, Pitfalls.
+
+--- a/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
++++ b/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
+@@ -165,7 +165,7 @@
+ #endif  // BUILDFLAG(IS_OZONE)
+ 
+   capabilities_.uses_default_gl_framebuffer = false;
+-  capabilities_.number_of_buffers = 3;
++  capabilities_.number_of_buffers = 5;
+   capabilities_.renderer_allocates_images = true;

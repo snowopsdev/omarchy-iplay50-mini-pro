@@ -420,6 +420,21 @@ Shell plugin / Quickshell / QML:
   (including Kid Mode's) for 250 ms, then maps them at the new size. An IPC
   "prepare rotate" hint from `tablet-orientation` gained only ~0.15 s and was removed.
   The whole screen settles ~0.7-1.0 s after rotation, mostly apps redrawing in software.
+- **Quickshell logs can fill `/run/user/1001` (2026-11-03).** That runtime directory
+  is a 736 MB tmpfs, and each shell instance keeps `quickshell/by-id/<id>/log.log`
+  there even after it exits. One instance wrote 683 MB of `QTimer::start: negative
+  intervals aren't allowed` in the hour around the 2026-11-01 daylight-saving
+  change, so a timer's computed interval went negative when the clock went back.
+  This timer is not fixed yet.
+  - **What a full directory breaks:** shell IPC answers "no running instance", and
+    `tablet-display` writes an empty screen-off flag, so `status` says `off` while
+    the panel is on.
+  - **Check:** `df -h /run/user/1001`. Delete the `by-id` folders of exited
+    instances; the running one has its `log.log` open.
+- **A restarted session comes up unlocked.** Stopping and starting
+  `omarchy-desktop` (or the user manager) starts a fresh shell with the lock off,
+  even if the screen was locked before. Lock it again afterwards with
+  `omarchy-shell tabletLock screenOff`.
 
 ## Rollback
 
