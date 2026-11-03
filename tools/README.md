@@ -13,6 +13,7 @@ under systemd. Nothing here needs adb.
 | `tsh` | Runs one command in the **initramfs rescue shell** (telnet, port 23) and returns its output and exit code. |
 | `tsh-put` | Copies a file into the rescue shell (netcat; needs `socat` on the desktop) and checks its sha256. Called `tput` in the project. |
 | `usb-proxy.py` | Small HTTP/HTTPS forward proxy that listens on 172.16.42.2:3128 only, for giving the tablet internet over the cable before Wi-Fi works. |
+| `device-frame.sh` | Puts a 1200×1920 / 1920×1200 `grim` screenshot into a drawn tablet frame with a shadow (ImageMagick 7). Made the README's screenshots in `docs/images/ui/`. |
 
 ## The USB link
 

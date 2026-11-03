@@ -1,18 +1,74 @@
-# Omarchy on the Alldocube iPlay 50 mini Pro (MediaTek MT8781 / Helio G99)
+<h1 align="center">Omarchy on the Alldocube iPlay 50 mini Pro</h1>
+
+<p align="center">
+  <b>Native Arch Linux ARM + <a href="https://github.com/basecamp/omarchy">Omarchy</a> (Hyprland) on a MediaTek MT8781 / Helio G99 tablet</b><br>
+  GPU-rendered desktop · hardware video · touch-first shell · Kid Mode · PIN lock screen
+</p>
+
+<p align="center">
+  <img src="docs/images/ui/home.png" width="860" alt="Home screen in landscape: clock, recent windows, app grid and the dock">
+</p>
 
 Native Arch Linux ARM + [Omarchy](https://github.com/basecamp/omarchy) (Hyprland) as the only
 operating system on an Alldocube iPlay 50 mini Pro tablet, with Wi-Fi, speaker audio, touch,
 auto-rotation, an on-screen keyboard with key-press vibration, the microphone, GPS (through gpsd), a GPU-rendered desktop (compositor, shell, GTK 4/Qt apps and
 Chromium), hardware H264 video in Chromium, and a touch-first "Home & Dock" shell.
-Work done 2026-10-27 to 2026-10-31.
-
-![Home & Dock shell](shell-plugin/screenshots/home-dock.png)
+Work done 2026-10-27 to 2026-11-03.
 
 > **Warning.** Following this guide **erases Android and all data** on the tablet, needs an
 > unlocked bootloader, and writes boot partitions. Some partitions cannot be read back over
 > fastboot, so a mistake can leave the tablet unbootable. Nothing here is supported by
 > Alldocube, MediaTek, Google or the Omarchy project. Read
 > [docs/01](docs/01-device-and-backups.md) (brick risks) completely before flashing anything.
+
+## A tour of the touch UI
+
+Screenshots taken on the tablet with `grim` on 2026-11-03 and placed in a drawn
+device frame (`tools/device-frame.sh`; the frame is generic, not a photo of the device).
+How each part works: [docs/10](docs/10-touch-ui.md).
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/ui/app.png" alt="Chromium full screen with the app handle"></td>
+    <td width="50%"><img src="docs/images/ui/peek.png" alt="Dock peeking over Chromium"></td>
+  </tr>
+  <tr>
+    <td><b>Apps run full screen</b>, one at a time. Chromium here renders on the Mali GPU; the thin handle at the bottom replaces the dock.</td>
+    <td><b>Dock peek</b>: tap the handle and the dock slides up over the app; swipe up for Home.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/ui/switcher.png" alt="Open apps switcher"></td>
+    <td><img src="docs/images/ui/apps.png" alt="Omarchy app search with the on-screen keyboard"></td>
+  </tr>
+  <tr>
+    <td><b>Open apps</b>: every window, newest first; tap to switch, × to close.</td>
+    <td><b>App search</b>: Omarchy's launcher, with the keyboard rising automatically for the text field.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/ui/keys.png" alt="On-screen keyboard over a terminal"></td>
+    <td><img src="docs/images/ui/desktop.png" alt="Desktop page of the on-screen keyboard"></td>
+  </tr>
+  <tr>
+    <td><b>On-screen keyboard</b> (patched wvkbd) with Esc/Tab/Ctrl/Alt/Super and arrows, plus 123 and Fn pages; each key press vibrates.</td>
+    <td><b>Desktop page</b>: window management, workspaces, copy/paste and rotation as big touch targets, in place of Omarchy's key chords.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/ui/kids.png" alt="Kid Mode tiles"></td>
+    <td><img src="docs/images/ui/pin.png" alt="Lock screen PIN pad"></td>
+  </tr>
+  <tr>
+    <td><b>Kid Mode</b>: big tiles of parent-approved apps, no bar, dock or shortcuts; leaving needs the parent PIN.</td>
+    <td><b>Lock screen</b>: swipe up, enter the PIN. The power key locks and blanks the screen; idle locks after 5 minutes.</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/images/ui/home-portrait.png" width="300" alt="Home screen in portrait">
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/images/ui/browser-keys-portrait.png" width="300" alt="Chromium with the keyboard in portrait">
+  <br>
+  <sub>Portrait: the accelerometer rotates the desktop, touch input and keyboard together.</sub>
+</p>
 
 ## The tablet
 
@@ -160,7 +216,7 @@ reconstructed from the notes, and which were not re-run after adaptation.
 | `gps/` | Property shim, linker config, chroot runner, HAL-protocol bridge to gpsd, units |
 | `power/` | Fuel-gauge handshake, USB input-current ceiling, battery logger and analysis |
 | `perf/` | Touch CPU boost, warm Chromium service, end-to-end latency and browser benchmarks |
-| `tools/` | `tablet` SSH helper, USB-link host setup |
+| `tools/` | `tablet` SSH helper, USB-link host setup, screenshot device frame |
 
 ## Credits and references
 
